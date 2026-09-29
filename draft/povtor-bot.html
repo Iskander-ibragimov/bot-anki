@@ -1,0 +1,633 @@
+<title>Повтор — прототип бота</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: Telegram phone on the left, a quiet "lab bench" panel with a simulated clock on the right; stacks on phones. */
+:root{
+  --page:#E6ECEF; --panel:#FFFFFF; --ink:#16202A; --muted:#5C6B78; --line:#D3DCE2;
+  --accent:#2F8AE0;
+  --wall:#C8D8B7; --bubble:#FFFFFF; --mine:#E3F8CF; --bar:#FFFFFF; --bar-ink:#16202A; --meta:#7A8A7A;
+  --kb:rgba(52,78,38,.34); --kb-ink:#FFFFFF;
+  --danger:#DD5147; --success:#3E9F55; --primary:#2F8AE0;
+  --quote:#2F8AE0; --toast:rgba(20,28,36,.88);
+  --c-new:#2F8AE0; --c-learn:#DD5147; --c-rev:#3E9F55;
+  --f-ui: -apple-system, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
+  --f-panel: "Onest", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --page:#0B1117; --panel:#131C25; --ink:#E4EBF1; --muted:#8C9AA7; --line:#24313D;
+  --accent:#5AA2E8; --wall:#0E1621; --bubble:#182533; --mine:#2B5278; --bar:#17212B; --bar-ink:#E4EBF1; --meta:#6D8196;
+  --kb:rgba(255,255,255,.09); --kb-ink:#FFFFFF; --quote:#5AA2E8; --toast:rgba(0,0,0,.85); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --page:#0B1117; --panel:#131C25; --ink:#E4EBF1; --muted:#8C9AA7; --line:#24313D;
+  --accent:#5AA2E8; --wall:#0E1621; --bubble:#182533; --mine:#2B5278; --bar:#17212B; --bar-ink:#E4EBF1; --meta:#6D8196;
+  --kb:rgba(255,255,255,.09); --kb-ink:#FFFFFF; --quote:#5AA2E8; --toast:rgba(0,0,0,.85); color-scheme:dark}
+html,body{height:100%}
+body{background:var(--page);color:var(--ink);font-family:var(--f-panel);padding-inline:16px;padding-block:24px;box-sizing:border-box}
+*{box-sizing:border-box}
+.wrap{display:flex;gap:28px;justify-content:center;align-items:flex-start;max-width:1040px;margin:0 auto}
+/* phone */
+.phone{width:400px;max-width:100%;height:min(820px,calc(100dvh - 48px));min-height:560px;border-radius:26px;overflow:hidden;display:flex;flex-direction:column;background:var(--wall);border:1px solid var(--line);position:relative;font-family:var(--f-ui);font-size:15px;flex:none}
+.hdr{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bar);color:var(--bar-ink);border-bottom:1px solid var(--line)}
+.ava{width:38px;height:38px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:600;font-size:17px;flex:none}
+.hdr b{display:block;font-size:15.5px;font-weight:600}
+.hdr small{color:var(--muted);font-size:13px}
+.hdr small.typing{color:var(--accent)}
+.chat{flex:1;overflow-y:auto;padding:10px 8px 6px;display:flex;flex-direction:column;gap:6px}
+.msg{max-width:88%;display:flex;flex-direction:column;gap:4px}
+.msg.bot{align-self:flex-start}
+.msg.me{align-self:flex-end}
+.bub{background:var(--bubble);color:var(--bar-ink);padding:7px 10px 6px;border-radius:14px;line-height:1.38;white-space:pre-wrap;overflow-wrap:anywhere;position:relative}
+.msg.bot .bub{border-bottom-left-radius:4px}
+.msg.me .bub{background:var(--mine);border-bottom-right-radius:4px}
+.meta{float:right;font-size:11.5px;color:var(--meta);margin:6px 0 -2px 10px}
+.bub blockquote{margin:4px 0;padding:2px 0 2px 8px;border-left:3px solid var(--quote);font-style:normal}
+.bub blockquote i{display:block}
+.bub code{font-family:var(--f-mono);font-size:13px}
+.bub .sp{display:block;height:4px}
+.kb{display:flex;flex-direction:column;gap:4px}
+.kb .row{display:flex;gap:4px}
+.kb button{flex:1;min-width:0;border:0;border-radius:9px;padding:9px 6px;background:var(--kb);color:var(--kb-ink);font:500 13.5px var(--f-ui);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kb button:hover{filter:brightness(1.08)}
+.kb button:focus-visible,.bar button:focus-visible,.panel button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.kb button.danger{background:var(--danger)} .kb button.success{background:var(--success)} .kb button.primary{background:var(--primary)}
+.kb button:disabled{opacity:.45;cursor:default}
+.voice{display:flex;align-items:center;gap:10px;min-width:210px}
+.voice .play{width:36px;height:36px;border-radius:50%;background:var(--accent);border:0;color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
+.wave{display:flex;align-items:center;gap:2px;height:22px;flex:1}
+.wave i{width:3px;border-radius:2px;background:var(--accent);opacity:.7}
+.bar{display:flex;align-items:center;gap:8px;padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px));background:var(--bar);border-top:1px solid var(--line);position:relative}
+.menu-btn{border:0;background:var(--accent);color:#fff;border-radius:16px;padding:7px 11px;font:600 13px var(--f-ui);cursor:pointer;display:flex;gap:5px;align-items:center}
+.bar input{flex:1;min-width:0;border:0;background:transparent;color:var(--bar-ink);font:15px var(--f-ui);padding:8px 4px;outline:none}
+.send{border:0;background:none;color:var(--accent);cursor:pointer;padding:6px;display:grid;place-items:center}
+.startbar{padding:10px 10px calc(10px + env(safe-area-inset-bottom,0px));background:var(--bar);border-top:1px solid var(--line)}
+.startbar button{width:100%;border:0;background:none;color:var(--accent);font:600 15px var(--f-ui);letter-spacing:.06em;padding:10px;cursor:pointer}
+.intro{margin:auto;max-width:300px;background:var(--bubble);color:var(--bar-ink);border-radius:14px;padding:14px 16px;line-height:1.45;text-align:center}
+.intro b{display:block;margin-bottom:6px}
+.cmds{position:absolute;left:8px;bottom:58px;background:var(--bar);color:var(--bar-ink);border:1px solid var(--line);border-radius:12px;padding:6px;width:min(300px,calc(100% - 16px));box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:5}
+.cmds button{display:flex;gap:10px;width:100%;text-align:left;border:0;background:none;color:inherit;padding:8px;border-radius:8px;font:14px var(--f-ui);cursor:pointer}
+.cmds button:hover{background:var(--kb)}
+.cmds code{color:var(--accent);font-family:var(--f-ui);font-weight:600;min-width:70px}
+.cmds span{color:var(--muted)}
+.toast{position:absolute;top:70px;left:50%;transform:translateX(-50%);background:var(--toast);color:#fff;padding:9px 14px;border-radius:10px;font:14px var(--f-ui);max-width:86%;text-align:center;z-index:6}
+/* panel */
+.panel{flex:1;max-width:420px;min-width:0;display:flex;flex-direction:column;gap:18px}
+.panel h1{font-size:30px;font-weight:600;letter-spacing:-.02em;margin:4px 0 0;text-wrap:balance}
+.panel .lede{color:var(--muted);margin:6px 0 0;line-height:1.5;font-size:14.5px}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.lbl{font-size:11.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 8px}
+.clock{font:500 34px var(--f-mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.clock-sub{color:var(--muted);font-size:13.5px;margin-top:2px}
+.jumps{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.jumps button,.acts button{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:8px;padding:7px 11px;font:500 13.5px var(--f-panel);cursor:pointer}
+.jumps button:hover,.acts button:hover{border-color:var(--accent);color:var(--accent)}
+.acts{display:flex;flex-wrap:wrap;gap:6px}
+.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:7px;line-height:1.45;font-size:14.5px}
+.steps code,.note code{font-family:var(--f-mono);font-size:12.5px;background:var(--page);padding:1px 5px;border-radius:5px}
+.legend{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;font-size:14px;align-items:center}
+.dot{width:10px;height:10px;border-radius:50%}
+.note{color:var(--muted);font-size:13.5px;line-height:1.5;margin:0}
+.state{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-size:14px}
+.state span:nth-child(even){font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+@media (max-width:820px){
+  .wrap{flex-direction:column;align-items:stretch}
+  .phone{width:100%;height:78dvh;min-height:520px;border-radius:18px}
+  .panel{max-width:none}
+}
+@media (prefers-reduced-motion:no-preference){.msg{animation:pop .16s ease-out}@keyframes pop{from{transform:translateY(4px);opacity:.4}}}
+</style>
+
+<div class="wrap">
+  <section class="phone" aria-label="Эмулятор чата с ботом">
+    <header class="hdr">
+      <div class="ava" aria-hidden="true">П</div>
+      <div><b>Повтор</b><small id="status">бот</small></div>
+    </header>
+    <div class="chat" id="chat" role="log" aria-live="polite"></div>
+    <div id="bottom"></div>
+    <div class="toast" id="toast" hidden></div>
+  </section>
+
+  <aside class="panel">
+    <div>
+      <h1>Повтор</h1>
+      <p class="lede">HTML5-драфт Telegram-бота для английских слов. Алгоритм тот же, что будет в боте: FSRS-6, шаги 1м → 10м, переучивание 10м, как в AnkiDroid. Всё работает в браузере, AI и озвучка имитируются.</p>
+    </div>
+
+    <div class="box">
+      <p class="lbl">Время у пользователя</p>
+      <div class="clock" id="clock">09:00:00</div>
+      <div class="clock-sub" id="clockSub">ср, 30 сентября · UTC+3</div>
+      <div class="jumps">
+        <button id="j1m" type="button">+1 мин</button>
+        <button id="j10m" type="button">+10 мин</button>
+        <button id="j1h" type="button">+1 час</button>
+        <button id="j1d" type="button">До завтра 09:00</button>
+      </div>
+    </div>
+
+    <div class="box">
+      <p class="lbl">Что попробовать</p>
+      <ol class="steps">
+        <li>Нажмите «Старт» и пройдите онбординг (или кнопку «Пропустить онбординг» ниже).</li>
+        <li>На новой карточке «Показать ответ»: кнопки <code>Снова &lt;1м</code> <code>Трудно &lt;6м</code> <code>Хорошо &lt;10м</code> <code>Легко 8д</code>.</li>
+        <li>Нажмите «Снова» и подождите: карточка вернётся через минуту в той же сессии.</li>
+        <li>Напишите в чат слово, например <code>resilient</code>, или несколько через перенос строки.</li>
+        <li>Команда <code>/gen собеседование в IT</code> соберёт колоду.</li>
+        <li>«До завтра 09:00»: придёт напоминание с числом карточек.</li>
+      </ol>
+    </div>
+
+    <div class="box">
+      <p class="lbl">Счётчики на карточке</p>
+      <div class="legend">
+        <span class="dot" style="background:var(--c-new)"></span><span>новые, осталось на сегодня</span>
+        <span class="dot" style="background:var(--c-learn)"></span><span>на закреплении (шаги 1м, 10м)</span>
+        <span class="dot" style="background:var(--c-rev)"></span><span>к повтору сегодня</span>
+      </div>
+    </div>
+
+    <div class="box">
+      <p class="lbl">Состояние</p>
+      <div class="state" id="state"></div>
+    </div>
+
+    <div class="acts">
+      <button id="skipOb" type="button">Пропустить онбординг</button>
+      <button id="reset" type="button">Начать заново</button>
+    </div>
+    <p class="note">Прототип показывает, как бот выглядит и ведёт себя в чате. В настоящем боте перевод своих слов делает бесплатный AI, озвучка идёт голосовым сообщением (Piper), а напоминания приходят пушем Telegram.</p>
+  </aside>
+</div>
+
+<script>
+/* ---------- FSRS-6 (default parameters) ---------- */
+const W=[0.212,1.2931,2.3065,8.2956,6.4133,0.8334,3.0194,0.001,1.8722,0.1666,0.796,1.4835,0.0614,0.2629,1.6483,0.6014,1.8729,0.5425,0.0912,0.0658,0.1542];
+const DECAY=-W[20], FACTOR=Math.pow(0.9,1/DECAY)-1;
+const clampD=d=>Math.min(10,Math.max(1,d));
+const initD=g=>clampD(W[4]-Math.exp(W[5]*(g-1))+1);
+const nextD=(d,g)=>{const dp=d+(-W[6]*(g-3))*(10-d)/9;return clampD(W[7]*initD(4)+(1-W[7])*dp)};
+const retr=(t,s)=>Math.pow(1+FACTOR*t/s,DECAY);
+const recallS=(d,s,r,g)=>s*(1+Math.exp(W[8])*(11-d)*Math.pow(s,-W[9])*(Math.exp(W[10]*(1-r))-1)*(g===2?W[15]:1)*(g===4?W[16]:1));
+const forgetS=(d,s,r)=>Math.min(W[11]*Math.pow(d,-W[12])*(Math.pow(s+1,W[13])-1)*Math.exp(W[14]*(1-r)),s/Math.exp(W[17]*W[18]));
+const shortS=(s,g)=>{let k=Math.exp(W[17]*(g-3+W[18]))*Math.pow(s,-W[19]);if(g>=3)k=Math.max(k,1);return s*k};
+const ivlDays=(s,r)=>Math.max(1,Math.min(36500,Math.round(s/FACTOR*(Math.pow(r,1/DECAY)-1))));
+const MIN=6e4, DAY=864e5, LSTEPS=[1,10], RSTEPS=[10];
+
+function sched(c,g,now,ret){
+  const n={...c}; const el=c.last==null?0:(now-c.last)/DAY;
+  if(c.state==='new'){n.S=W[g-1];n.D=initD(g)}
+  else if(el<1){n.S=shortS(c.S,g);n.D=nextD(c.D,g)}
+  else{const R=retr(el,c.S);n.S=g===1?forgetS(c.D,c.S,R):recallS(c.D,c.S,R,g);n.D=nextD(c.D,g)}
+  const grad=()=>{n.state='review';n.step=null;n.due=now+ivlDays(n.S,ret)*DAY};
+  if(c.state==='review'){
+    if(g===1){n.state='relearning';n.step=0;n.due=now+RSTEPS[0]*MIN;n.lapses=(c.lapses||0)+1}
+    else n.due=now+ivlDays(n.S,ret)*DAY;
+  } else {
+    const steps=c.state==='relearning'?RSTEPS:LSTEPS, step=c.state==='new'?0:c.step, keep=c.state==='relearning'?'relearning':'learning';
+    if(g===1){n.state=keep;n.step=0;n.due=now+steps[0]*MIN}
+    else if(g===2){n.state=keep;n.step=step;const m=step===0?(steps.length>1?(steps[0]+steps[1])/2:steps[0]*1.5):steps[step];n.due=now+m*MIN}
+    else if(g===3){if(step+1>=steps.length)grad();else{n.state=keep;n.step=step+1;n.due=now+steps[step+1]*MIN}}
+    else grad();
+  }
+  n.last=now;n.reps=(c.reps||0)+1;return n;
+}
+function fmt(ms){
+  const L=S.lang==='ru';
+  if(ms<MIN)return L?'<1м':'<1m';
+  const m=Math.round(ms/MIN);
+  if(m<60)return '<'+m+(L?'м':'m');
+  const h=ms/36e5; if(h<24)return Math.round(h)+(L?'ч':'h');
+  const d=Math.round(ms/DAY); if(d<30)return d+(L?'д':'d');
+  const dec=x=>(Math.round(x*10)/10).toString().replace('.',L?',':'.');
+  if(d<365)return dec(d/30)+(L?'мес':'mo');
+  return dec(d/365)+(L?'г':'y');
+}
+
+/* ---------- content ---------- */
+const RAW={
+ a1:[['apple','/ˈæpl/','noun','яблоко','I eat an apple every day.','Я ем яблоко каждый день.'],['window','/ˈwɪndəʊ/','noun','окно','Please open the window.','Открой, пожалуйста, окно.'],['busy','/ˈbɪzi/','adj','занятой','I am busy today.','Сегодня я занят.'],['ask','/ɑːsk/','verb','спрашивать','Can I ask a question?','Можно задать вопрос?'],['early','/ˈɜːli/','adv','рано','She gets up early.','Она рано встаёт.']],
+ a2:[['borrow','/ˈbɒrəʊ/','verb','брать взаймы','Can I borrow your pen?','Можно взять твою ручку?'],['receipt','/rɪˈsiːt/','noun','чек, квитанция','Keep the receipt, please.','Сохраните чек, пожалуйста.'],['journey','/ˈdʒɜːni/','noun','поездка, путешествие','The journey took six hours.','Поездка заняла шесть часов.'],['available','/əˈveɪləbl/','adj','доступный, свободный','Is this seat available?','Это место свободно?'],['improve','/ɪmˈpruːv/','verb','улучшать','I want to improve my English.','Я хочу улучшить свой английский.'],['enough','/ɪˈnʌf/','adv','достаточно','We have enough time.','У нас достаточно времени.'],['neighbour','/ˈneɪbə/','noun','сосед','My neighbour has a big dog.','У моего соседа большая собака.'],['invite','/ɪnˈvaɪt/','verb','приглашать','They invited us to dinner.','Они пригласили нас на ужин.'],['quiet','/ˈkwaɪət/','adj','тихий','The library is very quiet.','В библиотеке очень тихо.'],['decide','/dɪˈsaɪd/','verb','решать','I can’t decide what to wear.','Не могу решить, что надеть.'],['weather','/ˈweðə/','noun','погода','The weather is great today.','Сегодня отличная погода.'],['luggage','/ˈlʌɡɪdʒ/','noun','багаж','Where can I leave my luggage?','Где можно оставить багаж?'],['often','/ˈɒfn/','adv','часто','I often cook at home.','Я часто готовлю дома.'],['expensive','/ɪkˈspensɪv/','adj','дорогой','This hotel is too expensive.','Этот отель слишком дорогой.'],['forget','/fəˈɡet/','verb','забывать','Don’t forget your keys.','Не забудь ключи.'],['hurry','/ˈhʌri/','verb','спешить','We need to hurry.','Нам нужно спешить.'],['advice','/ədˈvaɪs/','noun','совет','Thanks for the advice.','Спасибо за совет.'],['careful','/ˈkeəfl/','adj','осторожный','Be careful on the stairs.','Осторожно на лестнице.'],['repair','/rɪˈpeə/','verb','чинить','He repaired my bike.','Он починил мой велосипед.'],['towards','/təˈwɔːdz/','prep','по направлению к','She walked towards the door.','Она пошла к двери.']],
+ b1:[['achieve','/əˈtʃiːv/','verb','достигать','She achieved her goal.','Она достигла своей цели.'],['reliable','/rɪˈlaɪəbl/','adj','надёжный','He is a reliable friend.','Он надёжный друг.'],['approach','/əˈprəʊtʃ/','noun','подход','We need a new approach.','Нам нужен новый подход.'],['admit','/ədˈmɪt/','verb','признавать','He admitted his mistake.','Он признал свою ошибку.'],['obvious','/ˈɒbviəs/','adj','очевидный','The answer is obvious.','Ответ очевиден.']],
+ b2:[['reluctant','/rɪˈlʌktənt/','adj','неохотный','She was reluctant to leave.','Ей не хотелось уходить.'],['thorough','/ˈθʌrə/','adj','тщательный','We did a thorough check.','Мы провели тщательную проверку.'],['undermine','/ˌʌndəˈmaɪn/','verb','подрывать','Lies undermine trust.','Ложь подрывает доверие.'],['feasible','/ˈfiːzəbl/','adj','осуществимый','Is the plan feasible?','Этот план осуществим?'],['outcome','/ˈaʊtkʌm/','noun','результат, исход','We are happy with the outcome.','Мы довольны результатом.']],
+ travel:[['boarding pass','/ˈbɔːdɪŋ pɑːs/','noun','посадочный талон','Show your boarding pass, please.','Покажите посадочный талон, пожалуйста.'],['departure','/dɪˈpɑːtʃə/','noun','отправление, вылет','Departure is at 7 a.m.','Вылет в 7 утра.'],['customs','/ˈkʌstəmz/','noun','таможня','We went through customs quickly.','Мы быстро прошли таможню.'],['sightseeing','/ˈsaɪtsiːɪŋ/','noun','осмотр достопримечательностей','We spent the day sightseeing.','Мы весь день осматривали достопримечательности.'],['landmark','/ˈlændmɑːk/','noun','достопримечательность','The tower is a famous landmark.','Башня — известная достопримечательность.'],['itinerary','/aɪˈtɪnərəri/','noun','маршрут поездки','Send me the itinerary.','Пришли мне маршрут.']],
+ it:[['deadline','/ˈdedlaɪn/','noun','крайний срок','The deadline is Friday.','Крайний срок — пятница.'],['deploy','/dɪˈplɔɪ/','verb','развёртывать','We deploy every Monday.','Мы выкатываем релиз по понедельникам.'],['requirement','/rɪˈkwaɪəmənt/','noun','требование','Check the requirements first.','Сначала проверь требования.'],['feedback','/ˈfiːdbæk/','noun','обратная связь','Thanks for your feedback.','Спасибо за обратную связь.'],['stakeholder','/ˈsteɪkhəʊldə/','noun','заинтересованная сторона','We met with the stakeholders.','Мы встретились с заинтересованными сторонами.'],['bottleneck','/ˈbɒtlnek/','noun','узкое место','The database is the bottleneck.','Узкое место — база данных.']],
+ phrases:[['no worries','/nəʊ ˈwʌriz/','phrase','без проблем','— Sorry! — No worries.','— Извини! — Без проблем.'],['fair enough','/feər ɪˈnʌf/','phrase','справедливо, резонно','Fair enough, let’s do it your way.','Резонно, сделаем по-твоему.'],['it’s up to you','/ɪts ʌp tə juː/','phrase','решать тебе','Pizza or sushi? It’s up to you.','Пицца или суши? Решать тебе.'],['I’m on my way','/aɪm ɒn maɪ weɪ/','phrase','я уже еду','Don’t worry, I’m on my way.','Не волнуйся, я уже еду.'],['long time no see','/lɒŋ taɪm nəʊ siː/','phrase','сто лет не виделись','Hey, long time no see!','Привет, сто лет не виделись!'],['make sense','/meɪk sens/','phrase','иметь смысл','Does that make sense?','Это понятно?']]
+};
+const DECKS=[
+ {id:'a1',ru:'A1 · Начальный',en:'A1 · Beginner',total:500},
+ {id:'a2',ru:'A2 · Базовый',en:'A2 · Elementary',total:500},
+ {id:'b1',ru:'B1 · Средний',en:'B1 · Intermediate',total:600},
+ {id:'b2',ru:'B2 · Выше среднего',en:'B2 · Upper-intermediate',total:600},
+ {id:'travel',ru:'Путешествия',en:'Travel',total:250},
+ {id:'it',ru:'IT и работа',en:'IT & work',total:300},
+ {id:'phrases',ru:'Разговорные фразы',en:'Everyday phrases',total:250}
+];
+const DICT={
+ resilient:['/rɪˈzɪliənt/','adj','стойкий, жизнестойкий','Kids are surprisingly resilient.','Дети на удивление стойкие.'],
+ serendipity:['/ˌserənˈdɪpəti/','noun','счастливая случайность','We met by pure serendipity.','Мы встретились по чистой случайности.'],
+ awkward:['/ˈɔːkwəd/','adj','неловкий','There was an awkward silence.','Повисла неловкая тишина.'],
+ cozy:['/ˈkəʊzi/','adj','уютный','What a cozy café!','Какое уютное кафе!'],
+ thrive:['/θraɪv/','verb','процветать','Plants thrive in the sun.','Растения хорошо растут на солнце.'],
+ gorgeous:['/ˈɡɔːdʒəs/','adj','великолепный','The view is gorgeous.','Вид великолепный.'],
+ procrastinate:['/prəˈkræstɪneɪt/','verb','откладывать на потом','Stop procrastinating!','Хватит откладывать!']
+};
+const GEN={
+ it:[['interview','/ˈɪntəvjuː/','noun','собеседование','I have an interview tomorrow.','Завтра у меня собеседование.'],['strength','/streŋθ/','noun','сильная сторона','Teamwork is my strength.','Командная работа — моя сильная сторона.'],['weakness','/ˈwiːknəs/','noun','слабая сторона','What is your biggest weakness?','Какая ваша главная слабость?'],['salary','/ˈsæləri/','noun','зарплата','What salary do you expect?','На какую зарплату вы рассчитываете?'],['experience','/ɪkˈspɪəriəns/','noun','опыт','I have five years of experience.','У меня пять лет опыта.'],['responsible for','/rɪˈspɒnsəbl fɔː/','phrase','отвечать за','I was responsible for the API.','Я отвечал за API.'],['hire','/ˈhaɪə/','verb','нанимать','They hired three engineers.','Они наняли трёх инженеров.'],['background','/ˈbækɡraʊnd/','noun','профессиональный бэкграунд','Tell me about your background.','Расскажите о своём опыте.'],['remote','/rɪˈməʊt/','adj','удалённый','Is this a remote position?','Это удалённая позиция?'],['notice period','/ˈnəʊtɪs ˈpɪəriəd/','noun','срок отработки','My notice period is two weeks.','Мне нужно отработать две недели.']],
+ travel:[['reservation','/ˌrezəˈveɪʃn/','noun','бронь','I have a reservation for two.','У меня бронь на двоих.'],['platform','/ˈplætfɔːm/','noun','платформа, перрон','The train leaves from platform 4.','Поезд отходит с четвёртой платформы.'],['round trip','/raʊnd trɪp/','noun','поездка туда и обратно','A round trip ticket, please.','Билет туда и обратно, пожалуйста.'],['souvenir','/ˌsuːvəˈnɪə/','noun','сувенир','I bought a souvenir for Mom.','Я купил маме сувенир.'],['the bill','/ðə bɪl/','noun','счёт (в ресторане)','Can we have the bill, please?','Можно счёт, пожалуйста?'],['delay','/dɪˈleɪ/','noun','задержка','There is a two-hour delay.','Задержка два часа.'],['check in','/tʃek ɪn/','verb','регистрироваться, заселяться','We check in at 3 p.m.','Мы заселяемся в 15:00.'],['crowded','/ˈkraʊdɪd/','adj','многолюдный','The square was crowded.','На площади было много людей.'],['tip','/tɪp/','noun','чаевые','Is the tip included?','Чаевые включены?'],['lost and found','/lɒst ənd faʊnd/','noun','бюро находок','Ask at the lost and found.','Спросите в бюро находок.']]
+};
+
+/* ---------- i18n ---------- */
+const T={
+ ru:{status:'бот',typing:'печатает…',again:'Снова',hard:'Трудно',good:'Хорошо',easy:'Легко',show:'Показать ответ',speak:'🔊 Озвучить',undo:'↩️ Отменить',
+  intro:'Учу английские слова по методу интервальных повторений, как Anki. Готовые колоды A1–B2, свои слова и AI-колоды. Одно напоминание в день.',introT:'Что умеет этот бот?',start:'СТАРТ',ph:'Сообщение или слово…',menu:'Меню'},
+ en:{status:'bot',typing:'typing…',again:'Again',hard:'Hard',good:'Good',easy:'Easy',show:'Show answer',speak:'🔊 Listen',undo:'↩️ Undo',
+  intro:'I teach English words with spaced repetition, like Anki. Ready decks A1–B2, your own words and AI decks. One reminder a day.',introT:'What can this bot do?',start:'START',ph:'Message or word…',menu:'Menu'}
+};
+const tt=k=>T[S.lang][k];
+const ru=()=>S.lang==='ru';
+
+/* ---------- state ---------- */
+let S, NOTES, nid;
+function fresh(){
+  NOTES={}; nid=1;
+  const byDeck={};
+  for(const [d,rows] of Object.entries(RAW)) byDeck[d]=rows.map(r=>addNote(d,r));
+  S={now:Date.UTC(2026,8,30,6,0,0),started:false,lang:'ru',ob:null,obi:0,known:0,off:180,remindAt:'09:00',newPerDay:10,ret:0.9,dir:'en_ru',autoplay:false,level:null,
+    decks:[],deckNotes:byDeck,cards:[],cid:1,msgs:[],mid:1,sess:null,undo:null,streak:0,lastDay:null,newDone:{},log:[],pushDay:null,eveDay:null,lastPing:0,lastReview:0,
+    gens:{},prev:{},pid:1,editing:null,typing:false,voiceMsg:null,mix:0,customDecks:[]};
+}
+function addNote(deck,r){const id=nid++;NOTES[id]={id,deck,word:r[0],ipa:r[1],pos:r[2],tr:r[3],exEn:r[4],exRu:r[5]};return id}
+const pad=n=>String(n).padStart(2,'0');
+const loc=ms=>new Date(ms+S.off*MIN);
+const dayKey=ms=>new Date(ms+S.off*MIN-4*36e5).toISOString().slice(0,10);
+const hhmm=ms=>{const d=loc(ms);return pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())};
+const localMin=ms=>{const d=loc(ms);return d.getUTCHours()*60+d.getUTCMinutes()};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function deckTitle(id){const d=DECKS.find(x=>x.id===id)||S.customDecks.find(x=>x.id===id);return d?(ru()?d.ru:d.en):id}
+
+/* ---------- messages ---------- */
+function send(from,html,kb,extra){const m={id:S.mid++,from,html,kb:kb||null,t:hhmm(S.now),...(extra||{})};S.msgs.push(m);render(true);return m.id}
+function edit(id,html,kb){const m=S.msgs.find(x=>x.id===id);if(!m)return;m.html=html;m.kb=kb||null;render(false)}
+function bot(html,kb,extra){return send('bot',html,kb,extra)}
+function toast(t){const el=document.getElementById('toast');el.textContent=t;el.hidden=false;clearTimeout(toast.h);toast.h=setTimeout(()=>el.hidden=true,1800)}
+function typing(ms,fn){S.typing=true;renderStatus();setTimeout(()=>{S.typing=false;renderStatus();fn()},ms)}
+const B=(t,cb,style)=>({t,cb,style});
+
+/* ---------- cards & queue ---------- */
+function subscribe(deckId){
+  if(S.decks.includes(deckId))return;
+  S.decks.push(deckId);
+  for(const n of S.deckNotes[deckId]) ensureCards(n,deckId);
+}
+function ensureCards(noteId,deck){
+  const dirs=S.dir==='both'?['en_ru','ru_en']:[S.dir];
+  for(const dir of dirs) if(!S.cards.some(c=>c.note===noteId&&c.dir===dir))
+    S.cards.push({id:S.cid++,note:noteId,deck,dir,state:'new',step:null,S:null,D:null,due:0,last:null,reps:0,lapses:0,buried:null});
+}
+function active(){const day=dayKey(S.now);return S.cards.filter(c=>S.decks.includes(c.deck)&&c.buried!==day&&(S.dir==='both'||c.dir===S.dir))}
+function counts(){
+  const a=active(), day=dayKey(S.now);
+  const newLeft=Math.max(0,S.newPerDay-(S.newDone[day]||0));
+  return {n:Math.min(newLeft,a.filter(c=>c.state==='new').length),l:a.filter(c=>c.state==='learning'||c.state==='relearning').length,r:a.filter(c=>c.state==='review'&&dayKey(c.due)<=day).length,newLeft};
+}
+function pick(){
+  const a=active(), now=S.now, day=dayKey(now);
+  const ld=a.filter(c=>(c.state==='learning'||c.state==='relearning')&&c.due<=now).sort((x,y)=>x.due-y.due);
+  if(ld.length)return ld[0];
+  const rv=a.filter(c=>c.state==='review'&&dayKey(c.due)<=day).sort((x,y)=>x.due-y.due);
+  const {newLeft}=counts();
+  const nw=newLeft>0?a.filter(c=>c.state==='new'):[];
+  if(!rv.length&&!nw.length)return null;
+  if(!rv.length)return nw[0];
+  if(!nw.length)return rv[0];
+  const every=Math.max(1,Math.ceil(rv.length/newLeft));
+  S.mix++; return S.mix%(every+1)===0?nw[0]:rv[0];
+}
+function nextLearnDue(){const l=active().filter(c=>c.state==='learning'||c.state==='relearning');return l.length?Math.min(...l.map(c=>c.due)):null}
+
+/* ---------- session rendering ---------- */
+function countsLine(){const c=counts();return `🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`}
+function cardBody(c,back){
+  const n=NOTES[c.note];
+  const en=`<b>${esc(n.word)}</b>\n${esc(n.ipa)} · <i>${esc(n.pos)}</i>`;
+  const tr=`<b>${esc(n.tr)}</b>`;
+  const ex=`<blockquote><i>${esc(n.exEn)}</i>${esc(n.exRu)}</blockquote>`;
+  const head=countsLine()+'<span class="sp"></span>';
+  if(c.dir==='en_ru') return head+en+(back?`\n\n${tr}${ex}`:'');
+  return head+tr+(back?`\n\n${en}${ex}`:`\n<i>${ru()?'Вспомните слово по-английски':'Recall the English word'}</i>`);
+}
+function frontKb(c){return [[B(tt('speak'),'v:'+c.note),B(tt('show'),'a:'+c.id,'primary')]]}
+function backKb(c){
+  const p={};for(const g of [1,2,3,4])p[g]=fmt(sched(c,g,S.now,S.ret).due-S.now);
+  const row2=[B(tt('speak'),'v:'+c.note)];if(S.undo)row2.push(B(tt('undo'),'u'));
+  return [[B(`${tt('again')} ${p[1]}`,`g:${c.id}:${c.reps}:1`,'danger'),B(`${tt('hard')} ${p[2]}`,`g:${c.id}:${c.reps}:2`),B(`${tt('good')} ${p[3]}`,`g:${c.id}:${c.reps}:3`,'success'),B(`${tt('easy')} ${p[4]}`,`g:${c.id}:${c.reps}:4`,'primary')],row2];
+}
+function ensureSessionMsg(){
+  const last=S.msgs[S.msgs.length-1];
+  if(S.sess&&S.msgs.some(m=>m.id===S.sess.msg)){
+    const tail=S.msgs.slice(S.msgs.findIndex(m=>m.id===S.sess.msg)+1);
+    if(tail.every(m=>m.voice))return;
+    edit(S.sess.msg,`<i>${ru()?'Сессия продолжается ниже ↓':'Session continues below ↓'}</i>`,null);
+  }
+  S.sess={msg:bot('…'),card:null,side:null,wait:null};
+  void last;
+}
+function startSession(){if(!S.decks.length){bot(ru()?'Сначала добавьте колоду: /decks':'Add a deck first: /decks');return}ensureSessionMsg();showNext()}
+function showNext(){
+  const c=pick();const s=S.sess;
+  if(c){s.card=c.id;s.side='front';s.wait=null;edit(s.msg,cardBody(c,false),frontKb(c));if(S.autoplay)voice(c.note);return}
+  const nl=nextLearnDue();
+  if(nl!==null&&nl-S.now<60e3){s.card=null;s.side='wait';s.wait=nl;renderWait();return}
+  s.card=null;s.side='done';s.wait=null;
+  const today=S.log.filter(x=>dayKey(x.t)===dayKey(S.now)).length;
+  let txt=ru()?`✅ <b>На сейчас всё!</b>\nПовторено сегодня: ${today}`:`✅ <b>All done for now!</b>\nReviewed today: ${today}`;
+  if(nl!==null)txt+=ru()?`\nКарточки на закреплении вернутся через ${fmt(nl-S.now).replace('<','')}. Я напомню.`:`\nLearning cards return in ${fmt(nl-S.now).replace('<','')}. I’ll ping you.`;
+  else if(S.streak>0)txt+=ru()?`\n🔥 Серия: ${S.streak} дн.`:`\n🔥 Streak: ${S.streak} d`;
+  edit(s.msg,txt,[[B(ru()?'➕ Добавить слова':'➕ Add words','help:add'),B(ru()?'📚 Колоды':'📚 Decks','decks')]]);
+}
+function renderWait(){const s=S.sess;const sec=Math.max(1,Math.ceil((s.wait-S.now)/1000));
+  edit(s.msg,countsLine()+'<span class="sp"></span>'+(ru()?`⏳ Следующая карточка через <b>${sec} сек</b>\nОна на шаге закрепления, как в Anki.`:`⏳ Next card in <b>${sec} s</b>\nIt is on a learning step, like in Anki.`),[[B(ru()?'Показать сейчас':'Show now','now','primary')]])}
+function voice(noteId){
+  const n=NOTES[noteId];
+  if(S.voiceMsg){S.msgs=S.msgs.filter(m=>m.id!==S.voiceMsg)}
+  S.voiceMsg=send('bot','',null,{voice:n.word});
+  try{const u=new SpeechSynthesisUtterance(n.word);u.lang='en-US';speechSynthesis.cancel();speechSynthesis.speak(u)}catch(e){}
+}
+
+function grade(id,reps,g){
+  const c=S.cards.find(x=>x.id===id);
+  if(!c||c.reps!==reps||!S.sess||S.sess.card!==id){toast(ru()?'Эта кнопка уже неактуальна':'This button is outdated');return}
+  const day=dayKey(S.now);
+  S.undo={card:{...c},streak:S.streak,lastDay:S.lastDay,newDone:{...S.newDone},logLen:S.log.length,buried:S.cards.filter(x=>x.note===c.note&&x.id!==c.id).map(x=>[x.id,x.buried])};
+  const wasNew=c.state==='new', before=c.state;
+  Object.assign(c,sched(c,g,S.now,S.ret));
+  if(wasNew)S.newDone[day]=(S.newDone[day]||0)+1;
+  S.log.push({t:S.now,g,state:before});
+  if(S.lastDay!==day){const y=dayKey(S.now-DAY);S.streak=S.lastDay===y?S.streak+1:1;S.lastDay=day}
+  if(S.dir==='both')for(const o of S.cards)if(o.note===c.note&&o.id!==c.id&&o.state!=='learning'&&o.state!=='relearning')o.buried=day;
+  S.lastReview=S.now;
+  showNext();renderState();
+}
+function undo(){
+  if(!S.undo){toast(ru()?'Нечего отменять':'Nothing to undo');return}
+  const u=S.undo;const c=S.cards.find(x=>x.id===u.card.id);Object.assign(c,u.card);
+  S.streak=u.streak;S.lastDay=u.lastDay;S.newDone=u.newDone;S.log.length=u.logLen;
+  for(const [id,b] of u.buried){const o=S.cards.find(x=>x.id===id);if(o)o.buried=b}
+  S.undo=null;ensureSessionMsg();S.sess.card=c.id;S.sess.side='front';S.sess.wait=null;
+  edit(S.sess.msg,cardBody(c,false),frontKb(c));toast(ru()?'Оценка отменена':'Rating undone');renderState();
+}
+
+/* ---------- onboarding ---------- */
+const PLACE=[['house',1],['answer',2],['borrow',3],['journey',4],['improve',5],['reliable',6],['approach',7],['thorough',8],['reluctant',9],['ubiquitous',10]];
+function obLang(){S.ob='lang';bot('Привет! Я <b>Повтор</b> 👋\nПомогу выучить английские слова методом интервальных повторений, как в Anki.\n\nНа каком языке общаться?\n<i>Hi! Which language should I use?</i>',[[B('🇷🇺 Русский','ob:lang:ru'),B('🇬🇧 English','ob:lang:en')]])}
+function obPlace(){S.ob='place';S.obi=0;S.known=0;S.obMsg=bot(placeText(),placeKb())}
+function placeText(){const w=PLACE[S.obi][0];return (ru()?`Проверим уровень · ${S.obi+1}/10\n\nЗнаете слово?\n\n<b>${w}</b>`:`Level check · ${S.obi+1}/10\n\nDo you know this word?\n\n<b>${w}</b>`)}
+function placeKb(){return [[B(ru()?'Знаю':'I know it','ob:pl:1','success'),B(ru()?'Не знаю':'Don’t know','ob:pl:0')]]}
+function levelOf(k){return k<=2?'A1':k<=5?'A2':k<=8?'B1':'B2'}
+function obGoal(){S.ob='goal';bot(ru()?`Ваш уровень примерно <b>${S.level}</b>.\n\nСколько новых слов в день?`:`Your level is about <b>${S.level}</b>.\n\nHow many new words per day?`,[[B(ru()?'5 · легко':'5 · light','ob:goal:5'),B(ru()?'10 · норм':'10 · normal','ob:goal:10','primary'),B(ru()?'20 · много':'20 · a lot','ob:goal:20')]])}
+function obRemind(){S.ob='remind';bot(ru()?'Во сколько присылать напоминание?':'When should I remind you?',[[B('08:00','ob:rem:08:00'),B('09:00','ob:rem:09:00'),B('12:00','ob:rem:12:00')],[B('19:00','ob:rem:19:00'),B('21:00','ob:rem:21:00')]])}
+function obTz(){S.ob='tz';const opts=[2,3,4,5,7,10].map(h=>{const d=new Date(S.now+h*36e5);return [pad(d.getUTCHours())+':'+pad(d.getUTCMinutes()),h*60]});
+  bot(ru()?'Сколько у вас сейчас времени? Так я узнаю часовой пояс.\n<i>Если нет вашего варианта, напишите время, например 14:35.</i>':'What time is it for you now? That tells me your time zone.\n<i>If it isn’t listed, type it, e.g. 14:35.</i>',
+  [opts.slice(0,3).map(([t,o])=>B(t,'ob:tz:'+o)),opts.slice(3).map(([t,o])=>B(t,'ob:tz:'+o))])}
+function offsetFromReported(h,m){const utc=new Date(S.now);let diff=(h*60+m)-(utc.getUTCHours()*60+utc.getUTCMinutes());while(diff<=-720)diff+=1440;while(diff>840)diff-=1440;return Math.round(diff/30)*30}
+function obDeck(){S.ob='deck';const id=S.level.toLowerCase(),d=DECKS.find(x=>x.id===id);
+  bot(ru()?`Под ваш уровень подойдёт колода <b>${d.ru}</b> · ${d.total} слов.\n<i>В драфте в колоде ${RAW[id].length} слов.</i>`:`The <b>${d.en}</b> deck fits your level · ${d.total} words.\n<i>This draft has ${RAW[id].length} words in it.</i>`,
+  [[B(ru()?`✅ Добавить «${d.ru}»`:`✅ Add “${d.en}”`,'ob:deck:'+id,'primary')],[B(ru()?'Выбрать другую':'Pick another','ob:deck:other')]])}
+function obDone(){S.ob=null;const tz='UTC'+(S.off>=0?'+':'−')+Math.abs(S.off/60);
+  bot(ru()?`Готово! Каждый день в <b>${S.remindAt}</b> (${tz}) пришлю напоминание, если есть что повторить.\n\nНачнём первые слова?`:`Done! Every day at <b>${S.remindAt}</b> (${tz}) I’ll remind you if something is due.\n\nShall we start?`,[[B(ru()?'▶ Начать':'▶ Start','learn','primary')]]);
+  renderBottom();renderState()}
+function skipOnboarding(){
+  if(!S.started){S.started=true;renderBottom()}
+  S.ob=null;S.level='A2';S.newPerDay=10;S.remindAt='09:00';S.off=180;subscribe('a2');
+  bot(ru()?'Настройки по умолчанию: уровень A2, 10 новых слов в день, напоминание в 09:00 (UTC+3).':'Defaults: level A2, 10 new words a day, reminder at 09:00 (UTC+3).',[[B(ru()?'▶ Начать':'▶ Start','learn','primary')]]);
+  renderBottom();renderState();
+}
+
+/* ---------- commands ---------- */
+function decksMsg(){
+  const lines=[...DECKS,...S.customDecks].map(d=>{const on=S.decks.includes(d.id);const a=S.cards.filter(c=>c.deck===d.id);
+    const nw=a.filter(c=>c.state==='new').length,due=a.filter(c=>c.state!=='new'&&c.due<=S.now).length;
+    return `${on?'✅':'▫️'} <b>${esc(ru()?d.ru:d.en)}</b> · ${d.total} ${ru()?'сл.':'w.'}`+(on?(ru()?`\n     новых ${nw} · к повтору ${due}`:`\n     new ${nw} · due ${due}`):'')});
+  const off=[...DECKS,...S.customDecks].filter(d=>!S.decks.includes(d.id));
+  const kb=[];for(let i=0;i<off.length;i+=2)kb.push(off.slice(i,i+2).map(d=>B('+ '+(ru()?d.ru:d.en),'sub:'+d.id)));
+  bot((ru()?'📚 <b>Колоды</b>\n\n':'📚 <b>Decks</b>\n\n')+lines.join('\n')+(ru()?'\n\n<i>Своя AI-колода: /gen тема</i>':'\n\n<i>Your own AI deck: /gen topic</i>'),kb);
+}
+function statsMsg(){
+  const a=S.cards.filter(c=>S.decks.includes(c.deck));const learned=a.filter(c=>c.state==='review'&&c.S>=21).length;
+  const rev=S.log.filter(x=>x.state==='review');const ret=rev.length?Math.round(100*rev.filter(x=>x.g>1).length/rev.length)+'%':'—';
+  const c=counts();
+  bot(ru()?`📊 <b>Статистика</b>\n\n🔥 Серия: ${S.streak} дн.\n📚 Выучено слов: ${learned}\n<i>интервал ≥ 21 дня</i>\n🗓 К повтору сегодня: ${c.r+c.l}\n🆕 Новых осталось: ${c.n}\n🔁 Повторов всего: ${S.log.length}\n🎯 Удержание: ${ret}`:
+    `📊 <b>Stats</b>\n\n🔥 Streak: ${S.streak} d\n📚 Words learned: ${learned}\n<i>interval ≥ 21 days</i>\n🗓 Due today: ${c.r+c.l}\n🆕 New left: ${c.n}\n🔁 Total reviews: ${S.log.length}\n🎯 Retention: ${ret}`);
+}
+const MODES=[[0.85,'Лёгкий','Light'],[0.9,'Оптимальный','Optimal'],[0.95,'Интенсив','Intense']];
+const DIRS={en_ru:'EN → RU',ru_en:'RU → EN',both:ru=>ru?'Оба':'Both'};
+function settingsText(){return ru()?'⚙️ <b>Настройки</b>\nНажмите на пункт, чтобы изменить.':'⚙️ <b>Settings</b>\nTap an item to change it.'}
+function settingsKb(){const m=MODES.find(x=>x[0]===S.ret);const d=S.dir==='both'?DIRS.both(ru()):DIRS[S.dir];
+  return [[B((ru()?'🌐 Язык: ':'🌐 Language: ')+(ru()?'Русский':'English'),'set:lang')],
+   [B((ru()?'🎯 Режим: ':'🎯 Mode: ')+(ru()?m[1]:m[2])+' · '+Math.round(S.ret*100)+'%','set:ret')],
+   [B((ru()?'🆕 Новых в день: ':'🆕 New per day: ')+S.newPerDay,'set:new')],
+   [B((ru()?'⏰ Напоминание: ':'⏰ Reminder: ')+S.remindAt,'set:rem')],
+   [B((ru()?'↔️ Направление: ':'↔️ Direction: ')+d,'set:dir')],
+   [B((ru()?'🔊 Автоозвучка: ':'🔊 Autoplay: ')+(S.autoplay?(ru()?'вкл':'on'):(ru()?'выкл':'off')),'set:auto')]]}
+function helpMsg(){bot(ru()?'<b>Команды</b>\n/learn — повторять\n/decks — колоды\n/gen тема — AI-колода\n/stats — статистика\n/settings — настройки\n/undo — отменить оценку\n\nЧтобы добавить своё слово, просто напишите его в чат. Можно списком, до 20 строк.':
+ '<b>Commands</b>\n/learn — review\n/decks — decks\n/gen topic — AI deck\n/stats — stats\n/settings — settings\n/undo — undo last rating\n\nTo add your own word, just type it. A list of up to 20 lines works too.')}
+
+function genDeck(topic){
+  const day=dayKey(S.now);S.gens[day]=S.gens[day]||0;
+  if(!topic){bot(ru()?'Напишите тему после команды, например:\n<code>/gen собеседование в IT</code>':'Add a topic, e.g.\n<code>/gen job interview in IT</code>');return}
+  if(S.gens[day]>=3){bot(ru()?'Сегодня лимит AI-колод исчерпан (3 из 3). Завтра будет снова.':'AI deck limit reached for today (3 of 3). Try again tomorrow.');return}
+  typing(1400,()=>{S.gens[day]++;const key=/it|айти|собес|работ|job|interview|work/i.test(topic)?'it':'travel';
+    const pid=S.pid++;S.prev[pid]={kind:'gen',topic,rows:GEN[key]};
+    bot((ru()?`🤖 <b>Колода «${esc(topic)}»</b> · ${GEN[key].length} слов\n\n`:`🤖 <b>Deck “${esc(topic)}”</b> · ${GEN[key].length} words\n\n`)+GEN[key].map(r=>`• <b>${esc(r[0])}</b> — ${esc(r[3])}`).join('\n')+
+      (ru()?`\n\n<i>Осталось генераций сегодня: ${3-S.gens[day]} из 3</i>`:`\n\n<i>Generations left today: ${3-S.gens[day]} of 3</i>`),
+      [[B(ru()?'✅ Добавить колоду':'✅ Add deck','gen:ok:'+pid,'primary'),B('✖️','gen:no:'+pid)]])});
+}
+function findDup(word){const w=word.trim().toLowerCase();for(const c of S.cards){const n=NOTES[c.note];if(S.decks.includes(c.deck)&&n.word.toLowerCase()===w)return c.deck}return null}
+function addWords(text){
+  const words=text.split('\n').map(s=>s.trim()).filter(Boolean).slice(0,20);
+  typing(700,()=>{
+    const found=[],dups=[],unknown=[];
+    for(const w of words){const d=findDup(w);if(d){dups.push([w,d]);continue}
+      const k=w.toLowerCase();let e=DICT[k];if(!e){for(const rows of Object.values(RAW).concat(Object.values(GEN))){const r=rows.find(r=>r[0]===k);if(r){e=r.slice(1);break}}}
+      if(e)found.push([k,...e]);else unknown.push(w)}
+    let out='';
+    if(dups.length)out+=dups.map(([w,d])=>(ru()?`ℹ️ «${esc(w)}» уже учите в колоде «${esc(deckTitle(d))}».`:`ℹ️ You already learn “${esc(w)}” in “${esc(deckTitle(d))}”.`)).join('\n')+'\n\n';
+    if(found.length===1&&!unknown.length){const r=found[0];const pid=S.pid++;S.prev[pid]={kind:'add',rows:[r]};
+      bot(out+`<b>${esc(r[0])}</b>\n${esc(r[1])} · <i>${esc(r[2])}</i>\n\n<b>${esc(r[3])}</b><blockquote><i>${esc(r[4])}</i>${esc(r[5])}</blockquote>`,
+        [[B(ru()?'✅ Добавить':'✅ Add','add:ok:'+pid,'primary'),B(ru()?'✏️ Изменить':'✏️ Edit','add:edit:'+pid),B('✖️','add:no:'+pid)]]);return}
+    if(found.length){const pid=S.pid++;S.prev[pid]={kind:'add',rows:found};
+      out+=(ru()?`Нашёл ${found.length}:\n`:`Found ${found.length}:\n`)+found.map(r=>`• <b>${esc(r[0])}</b> — ${esc(r[3])}`).join('\n');
+      if(unknown.length)out+=(ru()?`\n\nНе нашёл: ${unknown.map(esc).join(', ')}. В боте их переведёт AI.`:`\n\nNot found: ${unknown.map(esc).join(', ')}. In the bot, AI will translate them.`);
+      bot(out,[[B(ru()?`✅ Добавить все (${found.length})`:`✅ Add all (${found.length})`,'add:ok:'+pid,'primary'),B('✖️','add:no:'+pid)]]);return}
+    if(unknown.length){const w=unknown[0];S.editing={word:w};
+      bot(out+(ru()?`🤖 В драфте нет AI, поэтому перевода для «${esc(w)}» нет. В боте его сделает бесплатная нейросеть.\n\nНапишите перевод сообщением, и я создам карточку.`:`🤖 This draft has no AI, so there is no translation for “${esc(w)}”. The bot will use a free AI model.\n\nType the translation and I’ll create the card.`));return}
+    if(out)bot(out.trim());
+  });
+}
+function addToMine(rows){
+  if(!S.customDecks.find(d=>d.id==='mine')){S.customDecks.push({id:'mine',ru:'Мои слова',en:'My words',total:0});S.deckNotes.mine=[];S.decks.push('mine')}
+  const deck=S.customDecks.find(d=>d.id==='mine');
+  for(const r of rows){const id=addNote('mine',r);S.deckNotes.mine.push(id);deck.total++;ensureCards(id,'mine')}
+}
+
+/* ---------- input handling ---------- */
+function onText(raw){
+  const text=raw.trim();if(!text)return;
+  send('me',esc(text));
+  if(!S.started)return;
+  const [cmd,...rest]=text.split(' ');const arg=rest.join(' ').trim();
+  if(S.ob==='tz'){const m=text.match(/^(\d{1,2})[:.](\d{2})$/);if(m){S.off=offsetFromReported(+m[1],+m[2]);obDeck();return}}
+  if(S.ob){bot(ru()?'Давайте сначала закончим настройку — выберите вариант выше ↑':'Let’s finish setup first — pick an option above ↑');return}
+  if(S.editing&&!text.startsWith('/')){const e=S.editing;S.editing=null;
+    if(e.pid){const p=S.prev[e.pid];if(p)p.rows[0][3]=text;const r=p.rows[0];bot(`<b>${esc(r[0])}</b>\n\n<b>${esc(r[3])}</b>`,[[B(ru()?'✅ Добавить':'✅ Add','add:ok:'+e.pid,'primary'),B('✖️','add:no:'+e.pid)]]);return}
+    addToMine([[e.word.toLowerCase(),'','—',text,'','']]);bot(ru()?`✅ «${esc(e.word)}» добавлено в «Мои слова».`:`✅ “${esc(e.word)}” added to “My words”.`,[[B(ru()?'▶ Учить':'▶ Learn','learn','primary')]]);renderState();return}
+  switch(cmd){
+    case '/start':bot(ru()?'Вы уже настроены 🙂 /learn — повторять, /help — все команды.':'You’re all set 🙂 /learn to review, /help for commands.');return;
+    case '/learn':startSession();return;
+    case '/decks':decksMsg();return;
+    case '/stats':statsMsg();return;
+    case '/settings':bot(settingsText(),settingsKb());return;
+    case '/undo':undo();return;
+    case '/help':helpMsg();return;
+    case '/gen':genDeck(arg);return;
+  }
+  if(text.startsWith('/')){bot(ru()?'Не знаю такой команды. /help':'Unknown command. /help');return}
+  addWords(text);
+}
+function onCb(cb,msgId){
+  const p=cb.split(':');
+  switch(p[0]){
+    case 'ob':return onOb(p,msgId);
+    case 'learn':return startSession();
+    case 'a':{const c=S.cards.find(x=>x.id===+p[1]);if(!S.sess||S.sess.card!==+p[1]||S.sess.side!=='front'){toast(ru()?'Эта кнопка уже неактуальна':'This button is outdated');return}
+      S.sess.side='back';edit(S.sess.msg,cardBody(c,true),backKb(c));return}
+    case 'g':return grade(+p[1],+p[2],+p[3]);
+    case 'u':return undo();
+    case 'v':return voice(+p[1]);
+    case 'now':{if(!S.sess||S.sess.side!=='wait')return;const l=active().filter(c=>c.state==='learning'||c.state==='relearning').sort((a,b)=>a.due-b.due)[0];
+      if(l){S.sess.card=l.id;S.sess.side='front';S.sess.wait=null;edit(S.sess.msg,cardBody(l,false),frontKb(l))}return}
+    case 'decks':return decksMsg();
+    case 'help':return bot(ru()?'Напишите слово или фразу в чат, например <code>resilient</code>. Можно несколько строк сразу.':'Type a word or phrase, e.g. <code>resilient</code>. Several lines at once work too.');
+    case 'sub':{subscribe(p[1]);edit(msgId,`✅ ${ru()?'Колода':'Deck'} <b>${esc(deckTitle(p[1]))}</b> ${ru()?'добавлена.':'added.'}`,[[B(ru()?'▶ Учить':'▶ Learn','learn','primary')]]);renderState();return}
+    case 'set':return onSet(p[1],msgId);
+    case 'gen':{const pr=S.prev[+p[2]];if(!pr){toast('…');return}delete S.prev[+p[2]];
+      if(p[1]==='no'){edit(msgId,ru()?'Генерация отменена.':'Generation cancelled.');return}
+      const id='ai'+p[2];S.customDecks.push({id,ru:'🤖 '+pr.topic,en:'🤖 '+pr.topic,total:pr.rows.length});S.deckNotes[id]=pr.rows.map(r=>addNote(id,r));subscribe(id);
+      edit(msgId,(ru()?`✅ Колода «${esc(pr.topic)}» добавлена · ${pr.rows.length} слов`:`✅ Deck “${esc(pr.topic)}” added · ${pr.rows.length} words`),[[B(ru()?'▶ Учить':'▶ Learn','learn','primary')]]);renderState();return}
+    case 'add':{const pr=S.prev[+p[2]];if(!pr){toast('…');return}
+      if(p[1]==='no'){delete S.prev[+p[2]];edit(msgId,ru()?'Не добавляю.':'Not added.');return}
+      if(p[1]==='edit'){S.editing={pid:+p[2]};bot(ru()?`Пришлите свой перевод для «${esc(pr.rows[0][0])}»`:`Send your translation for “${esc(pr.rows[0][0])}”`);return}
+      delete S.prev[+p[2]];addToMine(pr.rows);
+      edit(msgId,(ru()?'✅ Добавлено в «Мои слова»: ':'✅ Added to “My words”: ')+pr.rows.map(r=>'<b>'+esc(r[0])+'</b>').join(', '),[[B(ru()?'▶ Учить':'▶ Learn','learn','primary')]]);renderState();return}
+  }
+}
+function onOb(p,msgId){
+  if(p[1]==='lang'){if(S.ob!=='lang')return;S.lang=p[2];renderBottom();renderStatus();edit(msgId,S.msgs.find(m=>m.id===msgId).html,null);obPlace();return}
+  if(p[1]==='pl'){if(S.ob!=='place')return;S.known+=+p[2];S.obi++;
+    if(S.obi<PLACE.length){edit(S.obMsg,placeText(),placeKb());return}
+    S.level=levelOf(S.known);edit(S.obMsg,(ru()?'Тест пройден ✅ ':'Test done ✅ ')+`${S.known}/10`,null);obGoal();return}
+  const m=S.msgs.find(x=>x.id===msgId);
+  const pickDone=label=>edit(msgId,m.html+`\n\n<b>→ ${esc(label)}</b>`,null);
+  if(p[1]==='goal'&&S.ob==='goal'){S.newPerDay=+p[2];pickDone(p[2]);obRemind();return}
+  if(p[1]==='rem'&&S.ob==='remind'){S.remindAt=p[2]+':'+p[3];pickDone(S.remindAt);obTz();return}
+  if(p[1]==='tz'&&S.ob==='tz'){S.off=+p[2];pickDone(hhmm(S.now));obDeck();return}
+  if(p[1]==='deck'&&S.ob==='deck'){
+    if(p[2]==='other'){edit(msgId,m.html,null);const kb=[];for(let i=0;i<DECKS.length;i+=2)kb.push(DECKS.slice(i,i+2).map(d=>B(ru()?d.ru:d.en,'ob:deck:'+d.id)));bot(ru()?'Выберите колоду:':'Pick a deck:',kb);return}
+    subscribe(p[2]);pickDone(deckTitle(p[2]));obDone();return}
+}
+function onSet(k,msgId){
+  if(k==='lang'){S.lang=ru()?'en':'ru';renderBottom();renderStatus()}
+  if(k==='ret'){const i=MODES.findIndex(x=>x[0]===S.ret);S.ret=MODES[(i+1)%3][0]}
+  if(k==='new'){S.newPerDay={5:10,10:20,20:5}[S.newPerDay]}
+  if(k==='rem'){const opts=['08:00','09:00','12:00','19:00','21:00'];S.remindAt=opts[(opts.indexOf(S.remindAt)+1)%opts.length]}
+  if(k==='dir'){S.dir={en_ru:'ru_en',ru_en:'both',both:'en_ru'}[S.dir];for(const d of S.decks)for(const n of S.deckNotes[d])ensureCards(n,d)}
+  if(k==='auto'){S.autoplay=!S.autoplay}
+  edit(msgId,settingsText(),settingsKb());renderState();
+}
+
+/* ---------- reminders & clock ---------- */
+function dueForToday(){const c=counts();return c.n+c.l+c.r}
+function checkReminders(){
+  if(!S.started||S.ob!==null||!S.decks.length)return;
+  const day=dayKey(S.now),lm=localMin(S.now),[rh,rm]=S.remindAt.split(':').map(Number),quiet=lm>=23*60||lm<8*60;
+  const studied=S.lastDay===day;
+  if(lm>=rh*60+rm&&S.pushDay!==day&&localMin(S.now)>=4*60){const n=dueForToday();S.pushDay=day;
+    if(n>0){bot(ru()?`⏰ <b>Пора повторить</b>\n${n} карточек · ~${Math.max(1,Math.ceil(n/3))} мин`:`⏰ <b>Time to review</b>\n${n} cards · ~${Math.max(1,Math.ceil(n/3))} min`,[[B(ru()?'▶ Начать':'▶ Start','learn','primary')]]);return}}
+  if(lm>=20*60&&!quiet&&!studied&&S.streak>=2&&S.eveDay!==day){S.eveDay=day;bot(ru()?`🔥 Серия <b>${S.streak} дн.</b> под угрозой. Хватит пары минут.`:`🔥 Your <b>${S.streak}-day</b> streak is at risk. Two minutes is enough.`,[[B(ru()?'▶ Спасти серию':'▶ Save the streak','learn','primary')]]);return}
+  const waiting=active().filter(c=>(c.state==='learning'||c.state==='relearning')&&c.due<=S.now).length;
+  const inWait=S.sess&&S.sess.side==='wait';
+  if(waiting&&!quiet&&!inWait&&S.now-S.lastReview>3*MIN&&S.lastPing<S.lastReview&&!(S.sess&&S.sess.side==='front'||S.sess&&S.sess.side==='back')){S.lastPing=S.now;
+    bot(ru()?`🧠 ${waiting} ${waiting===1?'карточка ждёт':'карточки ждут'} закрепления — это 1 минута.`:`🧠 ${waiting} card${waiting>1?'s':''} waiting on a learning step — 1 minute.`,[[B(ru()?'▶ Продолжить':'▶ Continue','learn','primary')]])}
+}
+function advance(ms){
+  const before=Math.floor(S.now/MIN);S.now+=ms;
+  if(S.sess&&S.sess.side==='wait'){if(S.now>=S.sess.wait)showNext();else renderWait()}
+  if(Math.floor(S.now/MIN)!==before){
+    if(S.sess&&S.sess.side==='done'&&ms>=MIN)S.sess.side='idle';
+    checkReminders();renderState()}
+  renderClock();
+}
+function jumpTomorrow(){
+  const d=loc(S.now);const target=Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()+1,9,0)-S.off*MIN;
+  // run reminders at intermediate points so evening push can fire, then land at 09:00
+  const eve=Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),20,0)-S.off*MIN;
+  if(S.now<eve){S.now=eve-1000;advance(1000)}
+  S.now=target-1000;if(S.sess&&S.sess.side==='wait'){S.sess.side='idle'}advance(1000);
+}
+
+/* ---------- render ---------- */
+const chat=document.getElementById('chat');
+function kbHtml(m){if(!m.kb)return '';return '<div class="kb">'+m.kb.map(r=>'<div class="row">'+r.map(b=>`<button type="button" class="${b.style||''}" data-cb="${esc(b.cb)}" data-m="${m.id}" title="${esc(b.t)}">${esc(b.t)}</button>`).join('')+'</div>').join('')+'</div>'}
+function waveHtml(){let s='';for(let i=0;i<26;i++){const h=5+Math.round(16*Math.abs(Math.sin(i*1.7+.5)));s+=`<i style="height:${h}px"></i>`}return s}
+function render(scroll){
+  if(!S.started){chat.innerHTML=`<div class="intro"><b>${tt('introT')}</b>${tt('intro')}</div>`;return}
+  chat.innerHTML=S.msgs.map(m=>{
+    if(m.voice)return `<div class="msg bot"><div class="bub"><div class="voice"><button class="play" type="button" data-say="${esc(m.voice)}" aria-label="Play">▶</button><div class="wave">${waveHtml()}</div></div><span class="meta">0:01 · ${m.t}</span></div></div>`;
+    return `<div class="msg ${m.from==='me'?'me':'bot'}"><div class="bub">${m.html}<span class="meta">${m.t}${m.from==='me'?' ✓✓':''}</span></div>${kbHtml(m)}</div>`}).join('');
+  if(scroll)chat.scrollTop=chat.scrollHeight;
+}
+function renderStatus(){const el=document.getElementById('status');el.textContent=S.typing?tt('typing'):tt('status');el.className=S.typing?'typing':''}
+function renderBottom(){
+  const b=document.getElementById('bottom');
+  if(!S.started){b.innerHTML=`<div class="startbar"><button type="button" id="startBtn">${tt('start')}</button></div>`;
+    document.getElementById('startBtn').onclick=()=>{S.started=true;renderBottom();send('me','/start');obLang()};return}
+  const val=document.getElementById('inp')?.value||'';
+  b.innerHTML=`<div class="bar"><button class="menu-btn" type="button" id="menuBtn" aria-haspopup="true">☰ ${tt('menu')}</button><input id="inp" autocomplete="off" placeholder="${tt('ph')}" aria-label="${tt('ph')}"><button class="send" type="button" id="sendBtn" aria-label="Send"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg></button><div class="cmds" id="cmds" hidden></div></div>`;
+  const inp=document.getElementById('inp');inp.value=val;
+  const go=()=>{const v=inp.value;inp.value='';onText(v)};
+  document.getElementById('sendBtn').onclick=go;
+  inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();go()}};
+  const cmds=document.getElementById('cmds');
+  const list=ru()?[['/learn','повторять'],['/decks','колоды'],['/gen','AI-колода по теме'],['/stats','статистика'],['/settings','настройки'],['/undo','отменить оценку'],['/help','помощь']]:[['/learn','review'],['/decks','decks'],['/gen','AI deck by topic'],['/stats','stats'],['/settings','settings'],['/undo','undo rating'],['/help','help']];
+  cmds.innerHTML=list.map(([c,d])=>`<button type="button" data-cmd="${c}"><code>${c}</code><span>${d}</span></button>`).join('');
+  document.getElementById('menuBtn').onclick=()=>{cmds.hidden=!cmds.hidden};
+  cmds.onclick=e=>{const b=e.target.closest('[data-cmd]');if(!b)return;cmds.hidden=true;if(b.dataset.cmd==='/gen'){inp.value='/gen ';inp.focus();return}onText(b.dataset.cmd)};
+}
+function renderClock(){const d=loc(S.now);
+  document.getElementById('clock').textContent=pad(d.getUTCHours())+':'+pad(d.getUTCMinutes())+':'+pad(d.getUTCSeconds());
+  const days=ru()?['вс','пн','вт','ср','чт','пт','сб']:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const mon=ru()?['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря']:['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  document.getElementById('clockSub').textContent=`${days[d.getUTCDay()]}, ${d.getUTCDate()} ${mon[d.getUTCMonth()]} · UTC${S.off>=0?'+':'−'}${Math.abs(S.off/60)} · ${ru()?'напоминание':'reminder'} ${S.remindAt}`;
+}
+function renderState(){
+  const c=counts();const a=S.cards.filter(x=>S.decks.includes(x.deck));
+  const rows=[['Колоды',S.decks.length],['Карточек всего',a.length],['Новых на сегодня',c.n],['На закреплении',c.l],['К повтору сегодня',c.r],['Повторов',S.log.length],['Серия, дней',S.streak],['Режим удержания',Math.round(S.ret*100)+'%']];
+  document.getElementById('state').innerHTML=rows.map(([k,v])=>`<span>${k}</span><span>${v}</span>`).join('');
+}
+
+chat.addEventListener('click',e=>{
+  const b=e.target.closest('[data-cb]');if(b){document.getElementById('cmds')?.setAttribute('hidden','');onCb(b.dataset.cb,+b.dataset.m);return}
+  const v=e.target.closest('[data-say]');if(v){try{const u=new SpeechSynthesisUtterance(v.dataset.say);u.lang='en-US';speechSynthesis.cancel();speechSynthesis.speak(u)}catch(err){}}
+});
+document.getElementById('j1m').onclick=()=>advance(MIN);
+document.getElementById('j10m').onclick=()=>advance(10*MIN);
+document.getElementById('j1h').onclick=()=>advance(60*MIN);
+document.getElementById('j1d').onclick=jumpTomorrow;
+document.getElementById('skipOb').onclick=skipOnboarding;
+document.getElementById('reset').onclick=boot;
+function boot(){fresh();render(true);renderStatus();renderBottom();renderClock();renderState()}
+boot();
+setInterval(()=>advance(1000),1000);
+</script>
