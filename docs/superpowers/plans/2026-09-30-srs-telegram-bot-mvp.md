@@ -18,7 +18,7 @@
 - Day boundary: 04:00 user-local time.
 - Quiet hours 23:00–08:00 local: no pings except the user's own `remind_at` push.
 - Evening streak push at 20:00 local, only if not studied today and `streak >= 2`.
-- Button colors (Bot API `style`): Again=`danger`, Hard=no style, Good=`success`, Easy=`primary`; label prefix emoji fallback 🟥⬛🟩🟦 is always present in text.
+- Button colors (Bot API `style`): Again=`danger`, Hard=no style, Good=`success`, Easy=`primary`. Button text is `"{label} {interval}"` (e.g. `Снова <1м`) — readable on clients that ignore `style`; no emoji prefix (4 buttons must fit one row).
 - Callback data grade format: `g:<card_id>:<reps>:<rating>` (≤ 64 bytes).
 - Limits: `/gen` 3 per user per day; add-word list ≤ 20 lines; AI deck 10–30 words; broadcast ≤ 25 msg/s.
 - Performance: grade → next card ≤ 300 ms p95 (excluding Telegram network).
@@ -109,7 +109,7 @@ CSV deck format (header): `word,ipa,pos,translation,example_en,example_ru`. Deck
 - "new" maps to a py-fsrs `Card()` that has never been reviewed; after first grade state is taken from py-fsrs `State`.
 
 - [ ] **Step 1:** Write tests:
-  - `test_new_card_preview_matches_anki_screenshot`: `preview(new_state(T), T, 0.9)`; assert `format_interval(due[1]-T,"en")=="<1m"`, `due[2]-T == 6min` → `"<6m"`, `due[3]-T == 10min` → `"<10m"`, `format_interval(due[4]-T,"en")` ends with `"d"` and `(due[4]-T).days` in range(1, 6).
+  - `test_new_card_preview_matches_anki_screenshot`: `preview(new_state(T), T, 0.9)`; assert `format_interval(due[1]-T,"en")=="<1m"`, `due[2]-T == 6min` → `"<6m"`, `due[3]-T == 10min` → `"<10m"`, `format_interval(due[4]-T,"en")` ends with `"d"` and `(due[4]-T).days == 8` (FSRS-6 default w[3]=8.2956 at retention 0.9; SM-2 would give 4d).
   - `test_good_twice_graduates_to_days`: Good at T, Good at T+10m → `state=="review"`, `due - now >= timedelta(days=1)`.
   - `test_again_on_review_card_goes_relearning_10m`: build review state (Good, Good, advance to due, Good), then Again → `state=="relearning"`, `lapses==1`, preview/`due-now == 10min`.
   - `test_higher_retention_gives_shorter_interval`: same history, interval at 0.95 < at 0.85.
@@ -155,7 +155,7 @@ CSV deck format (header): `word,ipa,pos,translation,example_en,example_ru`. Deck
 
 **Interfaces:**
 - Consumes: `srs.preview`, `srs.format_interval`.
-- Produces: `t(lang: str, key: str, **kw) -> str`. `@dataclass class CardView: word, ipa, pos, translation, example_en, example_ru, has_audio: bool, card_id: int, reps: int, state: str`. `render_front(v: CardView, lang, counts: tuple[int,int,int]) -> tuple[str, InlineKeyboardMarkup]` (counts = new/learning/review, shown as `🔵 3 · 🔴 1 · 🟢 12` like AnkiDroid). `render_back(v, lang, intervals: dict[int, str], counts) -> tuple[str, InlineKeyboardMarkup]` — one row of 4 buttons, text `"🟥 <1м\nСнова"` style (`"{emoji} {interval} · {label}"`), `style` per Global Constraints, callback `g:{card_id}:{reps}:{rating}`; second row `🔊` (if has_audio) and `↩️` undo. `render_wait(seconds: int, lang) -> (text, kb)` with `now:` button "Показать сейчас". `render_session_done(lang, reviewed: int, next_due_label: str | None)`.
+- Produces: `t(lang: str, key: str, **kw) -> str`. `@dataclass class CardView: word, ipa, pos, translation, example_en, example_ru, has_audio: bool, card_id: int, reps: int, state: str`. `render_front(v: CardView, lang, counts: tuple[int,int,int]) -> tuple[str, InlineKeyboardMarkup]` (counts = new/learning/review, shown as `🔵 3 · 🔴 1 · 🟢 12` like AnkiDroid). `render_back(v, lang, intervals: dict[int, str], counts) -> tuple[str, InlineKeyboardMarkup]` — one row of 4 buttons, text `"{label} {interval}"` (e.g. `Хорошо <10м`), `style` per Global Constraints, callback `g:{card_id}:{reps}:{rating}`; second row `🔊` (if has_audio) and `↩️` undo. `render_wait(seconds: int, lang) -> (text, kb)` with `now:` button "Показать сейчас". `render_session_done(lang, reviewed: int, next_due_label: str | None)`.
 
 - [ ] **Step 1:** Tests: `test_all_keys_present_in_both_locales` (parse both ftl files, key sets equal); `test_back_keyboard_styles_and_callbacks` (4 buttons, styles `["danger", None, "success", "primary"]`, callback `g:7:3:1`…`g:7:3:4`, each ≤ 64 bytes); `test_front_escapes_html` (word `"<b>"` rendered escaped, parse_mode HTML).
 - [ ] **Step 2:** Run → FAIL.
@@ -183,7 +183,7 @@ CSV deck format (header): `word,ipa,pos,translation,example_en,example_ru`. Deck
 
 - [ ] **Step 1:** Queue tests (pure): `test_due_learning_first`; `test_new_spread_among_reviews` (10 reviews, new_left 5 → new at every 2nd position); `test_respects_new_limit_zero`.
 - [ ] **Step 2:** Service tests with `frozen_now`:
-  - `test_full_learning_cycle`: start → front new card → show_answer intervals `{1:"<1м",2:"<6м",3:"<10м",4:"4д"}`-shaped (assert first three exactly, fourth endswith `"д"`) → grade Again → next screen is `wait` if no other cards (wait ≈ 60s) → advance clock 61s → same card front again.
+  - `test_full_learning_cycle`: start → front new card → show_answer intervals `{1:"<1м",2:"<6м",3:"<10м",4:"8д"}` → grade Again → next screen is `wait` if no other cards (wait ≈ 60s) → advance clock 61s → same card front again.
   - `test_stale_callback_ignored` (Review Focus 2): grade with reps=0 twice → second returns `stale`, exactly one ReviewLog; after `undo`, pressing the old button with reps=1 → `stale`.
   - `test_undo_restores_previous_state_and_streak_not_double_counted`.
   - `test_sibling_buried_next_day` (direction both).
