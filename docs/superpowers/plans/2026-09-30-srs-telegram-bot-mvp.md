@@ -1,288 +1,272 @@
-# SRS Telegram Bot — MVP Implementation Plan
+# SRS Telegram Bot — MVP Implementation Plan (Cloudflare Workers)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Chat-only Telegram bot that teaches English words to Russian speakers with FSRS-6 spaced repetition, 4 Anki-style buttons, learning steps, catalog/AI/custom decks and daily reminders, running on one 2 GB VPS.
+**Goal:** Chat-only Telegram bot that teaches English words to Russian speakers with FSRS-6 spaced repetition — card with spoilered answer and 4 grade buttons visible at once, cumulative progress, catalog/AI/custom decks with attached links, daily reminders — running on the free Cloudflare Workers + D1 tier.
 
-**Architecture:** One asyncio Python process (aiogram 3 long polling + minute-tick scheduler + Postgres-backed job runner) plus PostgreSQL 16, in Docker Compose. Layered modules: `bot` (handlers/views) → application services (`review`, `content`, `reminders`, `stats`, `users`, `entitlements`) → pure domain `srs` → infra adapters (`db`, `jobs`, `llm`, `dictionary`, `tts`). Layer rules enforced by import-linter.
+**Architecture:** One Cloudflare Worker: `fetch` handles the Telegram webhook (grammY), `scheduled` runs every minute (reminders, step pings, job retries). D1 (SQLite) holds everything. Layered modules: `bot` → application services (`review`, `content`, `reminders`, `stats`, `users`, `entitlements`, `admin`) → pure `srs` → infra (`db`, `jobs`, `llm`, `dictionary`, `tg`). Layer rules enforced by dependency-cruiser.
 
-**Tech Stack:** Python 3.12, aiogram 3.x (Bot API ≥ 9.4), `fsrs` (py-fsrs, FSRS-6), SQLAlchemy 2 async + asyncpg, Alembic, pydantic 2 + pydantic-settings, httpx, piper-tts, fluent.runtime (i18n), pytest + pytest-asyncio + testcontainers[postgres], ruff, import-linter, uv.
+**Tech Stack:** TypeScript 5 (strict), Cloudflare Workers + D1, wrangler 4, grammY (`webhookCallback(bot, "cloudflare-mod")`), ts-fsrs (FSRS-6), zod, Vitest + `@cloudflare/vitest-pool-workers`, dependency-cruiser, pnpm. Build-time only: Piper TTS + ffmpeg in GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-09-29-srs-telegram-bot-design.md`
 
 ## Global Constraints
 
-- Python 3.12; all datetimes are timezone-aware UTC (`datetime.now(UTC)`); py-fsrs is UTC-only.
-- Every service function that reads "now" takes `now: datetime` as a parameter — no `datetime.now()` outside `app/main.py` and `app/clock.py`.
-- FSRS: default FSRS-6 parameters; `learning_steps=(1m, 10m)`, `relearning_steps=(10m,)`, `maximum_interval=36500`, `enable_fuzzing=True`; `desired_retention` ∈ {0.85, 0.90, 0.95}, default 0.90.
-- Day boundary: 04:00 user-local time.
-- Quiet hours 23:00–08:00 local: no pings except the user's own `remind_at` push.
-- Evening streak push at 20:00 local, only if not studied today and `streak >= 2`.
-- Button colors (Bot API `style`): Again=`danger`, Hard=no style, Good=`success`, Easy=`primary`. Button text is `"{label} {interval}"` (e.g. `Снова <1м`) — readable on clients that ignore `style`; no emoji prefix (4 buttons must fit one row).
-- Callback data grade format: `g:<card_id>:<reps>:<rating>` (≤ 64 bytes).
-- Limits: `/gen` 3 per user per day; add-word list ≤ 20 lines; AI deck 10–30 words; broadcast ≤ 25 msg/s.
-- Performance: grade → next card ≤ 300 ms p95 (excluding Telegram network).
-- i18n: every user-facing string lives in `app/locales/{ru,en}/main.ftl`; no literals in handlers.
-- LLM: OpenAI-compatible chat API; providers tried in order from `LLM_PROVIDERS` (default: Groq `https://api.groq.com/openai/v1`, then OpenRouter `https://openrouter.ai/api/v1` free model). Response must validate against a pydantic schema or it counts as failure.
-- Config via `.env`: `BOT_TOKEN`, `DATABASE_URL`, `ADMIN_TG_ID`, `LLM_PROVIDERS` (JSON list of `{base_url, api_key, model}`), `PIPER_VOICE=en_US-lessac-medium`.
-- Coverage: ≥ 90% for `app/srs` and `app/review`, ≥ 70% overall.
+- All times are epoch milliseconds (UTC) in the DB; services take `now: number` as a parameter — only `src/index.ts` reads `Date.now()`.
+- FSRS: `generatorParameters({ request_retention, maximum_interval: 36500, enable_fuzz: true, enable_short_term: true, learning_steps: ['1m','10m'], relearning_steps: ['10m'] })`; retention ∈ {0.85, 0.9, 0.95}, default 0.9. Preview uses the same params with `enable_fuzz: false`.
+- Day boundary 04:00 user-local. Quiet hours 23:00–08:00 local for pings. Evening push 20:00 local if not studied today and streak ≥ 2.
+- Stages by `scheduled_days` (review) — `<7` 🌿 Учу, `7–20` 🌳 Знаю, `≥21` 🏆 Выучено; `new` 🌱 Новое; learning/relearning 🌿 Учу.
+- Card: translation and example inside `<tg-spoiler>`; parse_mode HTML; link previews disabled on session messages.
+- Grade keyboard 2×2: `[Снова, Трудно] / [Хорошо, Легко]`, text `"{label} {interval}"`, `style`: `danger` / none / `success` / `primary`; third row `🔊` (only if audio) and `↩️`. Callback `g:<cardId>:<reps>:<rating>` ≤ 64 bytes.
+- Learn-ahead: if nothing else to show and a learning card is due within 60 000 ms, show it now.
+- Limits: `/gen` 3 per user per local day; add-words ≤ 20 lines; AI deck 10–30 words; one link per note, `http(s)` only, ≤ 512 chars; pending link lives 10 min.
+- Free-tier budget per invocation: webhook ≤ 8 D1 calls (use `db.batch`) and ≤ 3 Telegram calls; cron tick ≤ 35 Telegram sends and ≤ 10 D1 calls. Enforced by tests with a counting D1 wrapper.
+- LLM/dictionary work runs in `ctx.waitUntil` with a 25 s overall timeout; the webhook answers first.
+- i18n: all user-facing strings in `src/bot/i18n/{ru,en}.ts`; `en` is typed `typeof ru` so missing keys fail typecheck.
+- Secrets: `BOT_TOKEN`, `WEBHOOK_SECRET`, `ADMIN_TG_ID`, `LLM_PROVIDERS` (JSON `[{baseUrl, apiKey, model}]`, default order Groq `https://api.groq.com/openai/v1`, then OpenRouter `https://openrouter.ai/api/v1`).
+- Coverage ≥ 90 % for `src/srs` and `src/review`, ≥ 70 % overall.
 
 ## Review Focus
 
-1. **User answers "what time is it now" across midnight** (e.g. user local 00:30, server UTC 21:30 previous day) → offset must come out as +03:00, not −21:00. Test in Task 7.
-2. **Stale button on an old message after a session restarted or after `/undo`** → must be ignored, never grade the card twice. Test in Task 6.
-3. **User adds a word that already exists in "Мои слова" or in a subscribed catalog deck** → no duplicate card; bot says it's already being learned. Test in Task 8.
-4. **LLM returns malformed JSON / Russian text in the English field / empty translation** → treated as provider failure, next provider tried, then manual-input fallback. Test in Task 8.
-5. **Scheduler tick missed (process restart at 08:59, back at 09:02)** → the 09:00 reminder is still sent once, not zero or twice. Test in Task 10.
+1. **Words + links in one message with odd layout** (URL first then words; two URLs on one line; a `text_link` entity on a word; URL with trailing punctuation `https://x.com/a).`) → each word gets the right link, punctuation trimmed, no crash. Test in Task 8.
+2. **Stale button** after undo or after a newer card was shown → never grades twice. Test in Task 6.
+3. **“Снова” on a learned word, then relearned** → interval after relearning is larger than a brand-new card’s, and the feedback line says memory was kept. Test in Task 2 and Task 6.
+4. **Reminder tick missed** (Worker cron skipped 09:00, runs 09:01) → exactly one push. Test in Task 10.
+5. **Free-tier D1 limit hit mid-day** (D1 throws “exceeded … daily row write limit”) → user gets the “технический перерыв” message, no unhandled 500 that makes Telegram retry-storm. Test in Task 11.
 
 ---
 
 ## File Structure
 
 ```
-pyproject.toml, uv.lock, .env.example, Dockerfile, docker-compose.yml, deploy.sh, README.md
-.importlinter, .github/workflows/ci.yml
-alembic.ini, migrations/env.py, migrations/versions/0001_initial.py
-app/
-  main.py            # wiring: bot, dispatcher, scheduler loop, job runner
-  config.py          # Settings (pydantic-settings)
-  clock.py           # now() -> datetime (UTC); patched in tests
-  srs/scheduler.py   # FSRS wrapper: preview, grade, format_interval
-  db/models.py       # SQLAlchemy models (spec §4)
-  db/session.py      # engine + async_sessionmaker
-  jobs/queue.py      # enqueue, claim, complete, fail (SKIP LOCKED)
-  jobs/runner.py     # registry + run loop
-  users/service.py   # onboarding state, tz offset, settings, local-day helpers
-  users/placement.py # 10-word level test
-  review/queue.py    # choose next card (pure, given candidate lists)
-  review/service.py  # start/show/grade/undo, session persistence
-  content/catalog.py # load CSV decks, subscribe user
-  content/dictionary.py # Free Dictionary API adapter
-  content/llm.py     # provider-chain OpenAI-compatible client + schemas
-  content/service.py # add words, AI deck generation
-  entitlements/service.py # per-day limits
-  tts/piper.py       # synth(text) -> ogg bytes
-  tts/jobs.py        # job: synth + sendVoice + store file_id
-  reminders/service.py # due computations per tick
-  reminders/jobs.py  # send push jobs, 429/403 handling
-  stats/service.py   # text stats
-  admin/service.py   # /admin stats, CSV deck upload, backup job
-  bot/views.py       # render card/front/back/keyboards/menus
-  bot/i18n.py        # fluent loader, t(lang, key, **kw)
-  bot/handlers/{start,learn,words,decks,settings,stats,admin}.py
-  locales/ru/main.ftl, locales/en/main.ftl
-data/decks/{a1,a2,b1,b2,travel,it_work,phrases}.csv
-scripts/build_decks.py
-tests/  (mirrors app/; tests/conftest.py provides pg container, session, fake_bot, frozen clock)
+package.json, pnpm-lock.yaml, tsconfig.json, wrangler.toml, vitest.config.ts, .dependency-cruiser.cjs
+.github/workflows/{ci.yml, deploy.yml, voice-decks.yml, backup.yml}
+migrations/0001_init.sql, 0002_seed_catalog.sql (generated)
+src/
+  index.ts              # export default { fetch, scheduled }
+  env.ts                # Env type + parseEnv (zod)
+  srs/fsrs.ts           # preview, grade, stage, memoryDays, formatInterval
+  db/client.ts          # Db wrapper over D1 (counts calls), row mappers
+  db/repo.ts            # typed queries used by services
+  jobs/queue.ts         # enqueue/claim/complete/fail on D1
+  users/service.ts      # getOrCreate, onboarding, tz, localDay, settings
+  users/placement.ts
+  review/pick.ts        # pure queue selection
+  review/service.ts     # show, grade, undo, feedback, day summary
+  content/links.ts      # parse words + URLs from text & entities
+  content/dictionary.ts
+  content/llm.ts
+  content/service.ts    # catalog subscribe, add words, AI decks, previews
+  entitlements/service.ts
+  reminders/service.ts  # tick
+  stats/service.ts
+  admin/service.ts
+  tg/client.ts          # thin Bot API wrapper used outside grammY context (cron)
+  bot/i18n/{ru,en,index}.ts
+  bot/views.ts
+  bot/handlers/{start,learn,words,decks,settings,stats,admin}.ts
+  bot/bot.ts            # grammY Bot factory, router, error boundary
+scripts/{build-decks.ts, voice-decks.ts, set-webhook.ts, csv-to-sql.ts}
+data/decks/*.csv, data/decks/index.json
+test/ (mirrors src/, plus test/helpers/{fakeTelegram.ts, countingDb.ts, clock.ts})
 ```
 
-CSV deck format (header): `word,ipa,pos,translation,example_en,example_ru`. Deck metadata in `data/decks/index.json`: `[{"file","title_ru","title_en","level"}]`.
+CSV header: `word,ipa,pos,translation,example_en,example_ru,audio_file_id`.
 
 ---
 
-### Task 1: Project skeleton, config, CI
+### Task 1: Skeleton, env, CI
 
-**Files:**
-- Create: `pyproject.toml`, `.env.example`, `Dockerfile`, `docker-compose.yml`, `.importlinter`, `.github/workflows/ci.yml`, `app/config.py`, `app/clock.py`, `tests/conftest.py`, `tests/test_config.py`
+**Files:** Create `package.json`, `tsconfig.json`, `wrangler.toml`, `vitest.config.ts`, `.dependency-cruiser.cjs`, `.github/workflows/ci.yml`, `src/env.ts`, `src/index.ts` (returns 200 “ok” on `GET /`), `test/env.test.ts`, `test/helpers/*`.
 
 **Interfaces:**
-- Produces: `Settings` with fields `bot_token: str`, `database_url: str`, `admin_tg_id: int`, `llm_providers: list[LLMProvider]` (`base_url`, `api_key`, `model`), `piper_voice: str = "en_US-lessac-medium"`; `get_settings() -> Settings` (cached). `clock.now() -> datetime` (UTC). Fixtures: `pg_url` (session-scoped testcontainers Postgres 16), `db` (AsyncSession, rolled back per test), `frozen_now` (monkeypatches `app.clock.now`).
+- Produces: `interface Env { DB: D1Database; BOT_TOKEN: string; WEBHOOK_SECRET: string; ADMIN_TG_ID: string; LLM_PROVIDERS: string }`; `parseEnv(env: Env): Config` with `llmProviders: {baseUrl, apiKey, model}[]`, `adminTgId: number`. Test helpers: `countingDb(db: D1Database): D1Database & { calls: number }`, `fakeTelegram()` (records Bot API calls, returns canned `Message` objects with incrementing `message_id`).
+- `wrangler.toml`: `compatibility_date = "2026-09-01"`, `compatibility_flags = ["nodejs_compat"]`, `[[d1_databases]] binding = "DB"`, `[triggers] crons = ["* * * * *"]`.
 
-- [ ] **Step 1:** Write `tests/test_config.py::test_llm_providers_parsed_from_json_env` — set `LLM_PROVIDERS='[{"base_url":"https://api.groq.com/openai/v1","api_key":"k","model":"m"}]'`, assert `get_settings().llm_providers[0].model == "m"`.
-- [ ] **Step 2:** Run `uv run pytest tests/test_config.py -v` → FAIL (module missing).
-- [ ] **Step 3:** Implement `app/config.py`, `app/clock.py`; `pyproject.toml` with deps from Tech Stack, ruff, pytest (`asyncio_mode=auto`), coverage config. `.importlinter` layers contract: `app.bot` > `app.review | app.content | app.reminders | app.stats | app.users | app.entitlements | app.admin | app.tts` > `app.srs` ; `app.srs` must not import `app.db`, `aiogram`, `httpx`. `docker-compose.yml`: services `db` (postgres:16, volume, healthcheck) and `app` (build ., `restart: always`, `depends_on: db healthy`, command `sh -c "alembic upgrade head && python -m app.main"`). CI: `uv sync`, `ruff check`, `lint-imports`, `pytest --cov`.
-- [ ] **Step 4:** Run `uv run pytest -v && uv run ruff check . && uv run lint-imports` → all pass.
-- [ ] **Step 5:** Commit `chore: project skeleton, config, CI`.
+- [ ] **Step 1:** `test/env.test.ts::parses LLM_PROVIDERS json` — expect `parseEnv({...,LLM_PROVIDERS:'[{"baseUrl":"https://api.groq.com/openai/v1","apiKey":"k","model":"m"}]'}).llmProviders[0].model === "m"`; invalid JSON throws.
+- [ ] **Step 2:** `pnpm test` → FAIL.
+- [ ] **Step 3:** Implement. dependency-cruiser rules: `src/srs` may not import anything from `src/` except itself; `src/bot` is the only layer importing `grammy`; services may not import `src/bot`.
+- [ ] **Step 4:** `pnpm typecheck && pnpm test && pnpm depcruise` → pass.
+- [ ] **Step 5:** Commit `chore: worker skeleton, env, CI`.
 
-### Task 2: SRS domain (FSRS wrapper)
+### Task 2: SRS domain
 
-**Files:**
-- Create: `app/srs/scheduler.py`, `tests/srs/test_scheduler.py`
+**Files:** Create `src/srs/fsrs.ts`, `test/srs/fsrs.test.ts`.
 
 **Interfaces:**
 - Produces:
-  - `@dataclass(frozen=True) class MemoryState: state: str  # "new"|"learning"|"review"|"relearning"; step: int | None; stability: float | None; difficulty: float | None; due: datetime; last_review: datetime | None; reps: int; lapses: int`
-  - `new_state(now: datetime) -> MemoryState`
-  - `grade(s: MemoryState, rating: int, now: datetime, retention: float) -> MemoryState` (rating 1..4; increments `reps`; `lapses += 1` when rating==1 from `review`)
-  - `preview(s: MemoryState, now: datetime, retention: float) -> dict[int, datetime]` (due for each rating; fuzz disabled for preview so labels are stable)
-  - `format_interval(delta: timedelta, lang: str) -> str`
-- "new" maps to a py-fsrs `Card()` that has never been reviewed; after first grade state is taken from py-fsrs `State`.
+  - `type CardState = "new"|"learning"|"review"|"relearning"`
+  - `interface Mem { state: CardState; step: number|null; stability: number|null; difficulty: number|null; due: number; lastReview: number|null; scheduledDays: number; reps: number; lapses: number }`
+  - `newMem(now: number): Mem`
+  - `grade(m: Mem, rating: 1|2|3|4, now: number, retention: number): Mem`
+  - `preview(m: Mem, now: number, retention: number): Record<1|2|3|4, number>` (due ms, no fuzz)
+  - `formatInterval(ms: number, lang: "ru"|"en"): string` — `<60s` → `<1м`/`<1m`; minutes → `<Nм`/`<Nm`; hours `Nч`/`Nh`; days `<30` `Nд`/`Nd`; months `2,3мес`/`2.3mo`; years `1,1г`/`1.1y`.
+  - `stage(m: Mem): "new"|"learning"|"known"|"learned"` (per Global Constraints).
+  - `memoryDays(m: Mem): number` — review: `scheduledDays`; relearning: `Math.round(stability)`; else 0.
+- Map `Mem` ↔ ts-fsrs `Card` in two private functions (`State.New=0…Relearning=3`, `learning_steps` → `step`).
 
-- [ ] **Step 1:** Write tests:
-  - `test_new_card_preview_matches_anki_screenshot`: `preview(new_state(T), T, 0.9)`; assert `format_interval(due[1]-T,"en")=="<1m"`, `due[2]-T == 6min` → `"<6m"`, `due[3]-T == 10min` → `"<10m"`, `format_interval(due[4]-T,"en")` ends with `"d"` and `(due[4]-T).days == 8` (FSRS-6 default w[3]=8.2956 at retention 0.9; SM-2 would give 4d).
-  - `test_good_twice_graduates_to_days`: Good at T, Good at T+10m → `state=="review"`, `due - now >= timedelta(days=1)`.
-  - `test_again_on_review_card_goes_relearning_10m`: build review state (Good, Good, advance to due, Good), then Again → `state=="relearning"`, `lapses==1`, preview/`due-now == 10min`.
-  - `test_higher_retention_gives_shorter_interval`: same history, interval at 0.95 < at 0.85.
-  - `test_format_interval_ru`: 45s→`"<1м"`, 6min→`"6м"`, 1d→`"1д"`, 70d→`"2,3мес"`, 400d→`"1,1г"`; en: `"<1m","6m","1d","2.3mo","1.1y"`. Rule: `<1m` below 60s; minutes rounded; hours `"ч"/"h"` below 1 day; days below 30; months = days/30 one decimal; years = days/365 one decimal.
-  - `test_preview_labels_learning_minutes_use_lt_prefix`: for state "new"/"learning" minute labels are prefixed `<` (Anki style), for "review" they are not. (`format_interval` takes `approx: bool = False`; `views` passes `approx=True` for learning states.)
-- [ ] **Step 2:** Run `uv run pytest tests/srs -v` → FAIL.
-- [ ] **Step 3:** Implement with `fsrs.Scheduler(desired_retention=r, learning_steps=(timedelta(minutes=1), timedelta(minutes=10)), relearning_steps=(timedelta(minutes=10),), maximum_interval=36500, enable_fuzzing=...)`; cache one scheduler per `(retention, fuzz)`. Convert `MemoryState` ↔ `fsrs.Card` in two private functions. If py-fsrs "Hard" on first learning step returns something other than 6 min, the test is the source of truth for the Anki behavior: Hard on step 0 = average of step 0 and step 1 = 5.5 → labelled `<6m`; assert the label, not the exact minute.
-- [ ] **Step 4:** Run `uv run pytest tests/srs -v --cov=app/srs` → PASS, coverage ≥ 90%.
-- [ ] **Step 5:** Commit `feat(srs): FSRS-6 wrapper with Anki learning steps`.
+- [ ] **Step 1:** Tests:
+  - `new card preview matches reference`: labels `["<1м","<6м","<10м","8д"]`.
+  - `good good graduates to 2 days`; `third good gives > 7 days` (interval grows: each successive Good on time strictly increases `scheduledDays`).
+  - `again on learned keeps memory` (Review Focus 3): take card to `scheduledDays ≥ 21` by repeated on-time Good; Again → `state=="relearning"`, `lapses==1`, `memoryDays > 1`; then Good after 10 min → `scheduledDays` > scheduledDays of a new card after Good,Good (2).
+  - `higher retention → shorter interval` (0.95 < 0.85 for same history).
+  - `stage thresholds` 6→learning, 7→known, 21→learned.
+  - `formatInterval ru/en` table from the signature.
+- [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** `pnpm test test/srs --coverage` → pass, ≥ 90 %.
+- [ ] **Step 5:** Commit `feat(srs): FSRS-6 wrapper, stages, interval formatting`.
 
-### Task 3: Database schema
+### Task 3: D1 schema and repo
 
-**Files:**
-- Create: `app/db/models.py`, `app/db/session.py`, `alembic.ini`, `migrations/env.py`, `migrations/versions/0001_initial.py`, `tests/db/test_schema.py`
-
-**Interfaces:**
-- Produces: models `User, Deck, Note, UserDeck, Card, ReviewLog, Session, Job` exactly as spec §4, plus `users.onboarding_step: str | None`, `users.gens_today: int`, `users.gens_date: date | None`, `users.autoplay: bool = False`, `cards.hidden_until_day: date | None` (sibling burying), `review_log.undone: bool = False`. `get_sessionmaker(url) -> async_sessionmaker`. Enums as `String` with CHECK constraints (keeps migrations simple).
-
-- [ ] **Step 1:** Tests: `test_migration_upgrade_downgrade` (alembic upgrade head → downgrade base → upgrade head on the container); `test_card_unique_per_user_note_direction` (second insert raises `IntegrityError`); `test_note_unique_per_deck_word`.
-- [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement models + hand-written migration `0001_initial` with the indexes from spec §4.
-- [ ] **Step 4:** Run `uv run pytest tests/db -v` → PASS.
-- [ ] **Step 5:** Commit `feat(db): initial schema`.
-
-### Task 4: Postgres job queue
-
-**Files:**
-- Create: `app/jobs/queue.py`, `app/jobs/runner.py`, `tests/jobs/test_queue.py`
+**Files:** Create `migrations/0001_init.sql`, `src/db/client.ts`, `src/db/repo.ts`, `test/db/repo.test.ts`.
 
 **Interfaces:**
-- Produces: `async enqueue(db, kind: str, payload: dict, run_at: datetime, dedup_key: str | None = None) -> int | None` (returns None if a not-done job with same `dedup_key` exists; add `jobs.dedup_key` unique partial index `WHERE done_at IS NULL` in migration 0002). `async claim(db, now, limit=10) -> list[Job]` (`FOR UPDATE SKIP LOCKED`, sets `locked_at`, skips jobs locked < 5 min ago). `async complete(db, job_id)`; `async fail(db, job_id, error: str, now)` (retry with backoff 30s·2^attempts, give up after 3 attempts → `done_at` set, `error` kept). `Runner.register(kind: str, handler: Callable[[dict], Awaitable[None]])`; `async Runner.run_once(now) -> int` (jobs processed).
+- Schema as spec §4 (with indexes) plus columns later tasks rely on: `review_log.streak_before`, `review_log.last_study_day_before` (Task 6 undo), `sessions.last_voice_message_id` (Task 9), `users.mix_counter` (Task 6 interleaving).
+- Produces `Repo` class constructed with `D1Database`: `getUserByTg(tgId)`, `insertUser(u)`, `updateUser(id, patch)`, `getSession(userId)`, `saveSession(s)`, `subscribe(userId, deckId, now)`, `userDeckIds(userId)`, `candidateCards(userId, now, dayEndMs, limitEach=50) -> {learning: CardRow[], review: CardRow[], newNotes: NoteRow[]}` (single `batch` of 3 selects; `newNotes` = notes in subscribed decks without a card for that direction, ordered by note id), `countsForUser(userId, now, dayEndMs, newLeft)`, `insertCard`, `gradeBatch(stmts)`, `lastReviewLog(userId)`, `markUndone(logId)`, `findNoteForUser(userId, wordLower) -> {note, deckId} | null`, `insertNotes(deckId, rows) -> ids`, `setNoteSourceUrl(noteId, url)`, `setNoteAudio(noteId, fileId)`, `bumpUsage(day, reviews, rows)`.
 
-- [ ] **Step 1:** Tests: `test_two_concurrent_claimers_never_get_same_job` (two sessions claim concurrently, disjoint ids); `test_failed_job_retried_then_abandoned_after_3`; `test_dedup_key_prevents_duplicate_pending_job`; `test_future_job_not_claimed`.
-- [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement + migration `0002_jobs_dedup`.
-- [ ] **Step 4:** Run → PASS.
-- [ ] **Step 5:** Commit `feat(jobs): postgres-backed job queue`.
+- [ ] **Step 1:** Tests on vitest-pool-workers D1 (migrations applied via `applyD1Migrations`): `unique card per user/note/direction`; `candidateCards returns due learning, due-today reviews and unseen notes in one batch` (assert `countingDb.calls === 1`); `findNoteForUser is case-insensitive and trims`.
+- [ ] **Step 2–4:** FAIL → implement → PASS.
+- [ ] **Step 5:** Commit `feat(db): D1 schema and repository`.
+
+### Task 4: Job queue on D1
+
+**Files:** Create `src/jobs/queue.ts`, `test/jobs/queue.test.ts`.
+
+**Interfaces:**
+- Produces: `enqueue(db, kind, payload, runAt, dedupKey?) -> number|null`; `claim(db, now, limit) -> Job[]` (atomic via `UPDATE jobs SET locked_at=? WHERE id IN (SELECT id … LIMIT ?) AND locked_at IS NULL RETURNING *`; locks older than 5 min are reclaimable); `complete(db, id)`; `fail(db, id, error, now)` — retry at `now + 30s·2^attempts`, give up after 3.
+- Job kinds used later: `push` (send a message), `voice` (sendVoice by URL and store file_id).
+
+- [ ] **Step 1:** Tests: `dedup key blocks second pending job`; `future job not claimed`; `failed job retried then abandoned after 3`; `claim twice returns disjoint sets`.
+- [ ] **Step 2–4:** FAIL → implement → PASS.
+- [ ] **Step 5:** Commit `feat(jobs): D1 job queue`.
 
 ### Task 5: i18n and views
 
-**Files:**
-- Create: `app/bot/i18n.py`, `app/bot/views.py`, `app/locales/{ru,en}/main.ftl`, `tests/bot/test_i18n.py`, `tests/bot/test_views.py`
+**Files:** Create `src/bot/i18n/{ru,en,index}.ts`, `src/bot/views.ts`, `test/bot/views.test.ts`.
 
 **Interfaces:**
-- Consumes: `srs.preview`, `srs.format_interval`.
-- Produces: `t(lang: str, key: str, **kw) -> str`. `@dataclass class CardView: word, ipa, pos, translation, example_en, example_ru, has_audio: bool, card_id: int, reps: int, state: str`. `render_front(v: CardView, lang, counts: tuple[int,int,int]) -> tuple[str, InlineKeyboardMarkup]` (counts = new/learning/review, shown as `🔵 3 · 🔴 1 · 🟢 12` like AnkiDroid). `render_back(v, lang, intervals: dict[int, str], counts) -> tuple[str, InlineKeyboardMarkup]` — one row of 4 buttons, text `"{label} {interval}"` (e.g. `Хорошо <10м`), `style` per Global Constraints, callback `g:{card_id}:{reps}:{rating}`; second row `🔊` (if has_audio) and `↩️` undo. `render_wait(seconds: int, lang) -> (text, kb)` with `now:` button "Показать сейчас". `render_session_done(lang, reviewed: int, next_due_label: str | None)`.
-
-- [ ] **Step 1:** Tests: `test_all_keys_present_in_both_locales` (parse both ftl files, key sets equal); `test_back_keyboard_styles_and_callbacks` (4 buttons, styles `["danger", None, "success", "primary"]`, callback `g:7:3:1`…`g:7:3:4`, each ≤ 64 bytes); `test_front_escapes_html` (word `"<b>"` rendered escaped, parse_mode HTML).
-- [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement. aiogram's `InlineKeyboardButton` accepts `style` in versions supporting Bot API 9.4; if the pinned aiogram lacks it, subclass `InlineKeyboardButton` with `style: str | None = None` (pydantic extra field) — decide at implementation, test asserts the serialized JSON contains `"style":"danger"`.
-- [ ] **Step 4:** Run → PASS.
-- [ ] **Step 5:** Commit `feat(bot): i18n and card views`.
-
-### Task 6: Review service (session, queue, grading, undo)
-
-**Files:**
-- Create: `app/review/queue.py`, `app/review/service.py`, `tests/review/test_queue.py`, `tests/review/test_service.py`
-
-**Interfaces:**
-- Consumes: models (Task 3), `srs.grade/preview/new_state` (Task 2), `users.service.local_day(user, now) -> date` (Task 7 — implement `local_day` here first if Task 7 not done; it lives in `app/users/service.py`: `local_day(tz_offset_min: int, now: datetime) -> date` with 04:00 boundary).
+- Consumes: `preview`, `formatInterval`, `stage`, `memoryDays` (Task 2).
 - Produces:
-  - `pick_next(learning_due: list[CardRow], review_due: list[CardRow], new: list[NoteRow], new_left: int, rng: Random) -> Pick | None` (pure). Order: learning with `due <= now` first (earliest due); then interleave review and new so new cards are spread evenly (one new per `ceil(len(review)/new_left)` reviews); `Pick(kind: "card"|"new", id: int)`.
-  - `next_learning_due(db, user_id) -> datetime | None`
-  - `async start_or_resume(db, user_id, now) -> Screen`
-  - `async show_answer(db, user_id, card_id, now) -> Screen`
-  - `async grade(db, user_id, card_id, reps: int, rating: int, now, duration_ms: int) -> Screen` — ignores (returns `Screen(kind="stale")`) when `reps` ≠ current; single transaction: srs.grade → insert ReviewLog → update Card → update `users.streak/last_study_date` (streak +1 if last day was yesterday-local, reset to 1 if gap, unchanged if today) → sibling bury: other direction card of same note gets `hidden_until_day = local_day + 1` when both directions enabled.
-  - `async undo(db, user_id, now) -> Screen` — restores card fields from the last non-undone ReviewLog's `state_before` (store full `MemoryState` JSON in `review_log.state_before`), marks log `undone=True`; only the last one (repeated undo → "nothing to undo").
-  - `Screen(kind: "front"|"back"|"wait"|"done"|"stale"|"empty", view: CardView | None, intervals: dict[int,str] | None, wait_seconds: int | None, counts: tuple[int,int,int])`.
-  - New cards: row in `cards` created on first pick (`new_state(now)`), counts toward daily `new_per_day` (count ReviewLog of state_before=="new" for local day).
-  - Wait rule: nothing to show and `next_learning_due - now < 60s` → `wait`; else `done`.
+  - `t(lang, key, vars?)`.
+  - `interface CardView { cardId; reps; direction: "en_ru"|"ru_en"; word; ipa; pos; translation; exampleEn; exampleRu; hasAudio: boolean; sourceUrl: string|null; mem: Mem }`
+  - `type Feedback = { word: string; kind: "grow"|"step"|"lapse"|"first"; beforeDays: number; afterMs: number; keptDays?: number }`
+  - `renderCard(v: CardView, counts: {n,l,r}, intervals: Record<1|2|3|4,string>, feedback: Feedback|null, canUndo: boolean, lang) -> { text: string; keyboard: InlineKeyboardButton[][] }` — layout from spec §2.2; source link rendered as `🔗 <a href="{url}">{hostname without www}</a>`.
+  - `renderDone(summary: DaySummary, lang)` where `DaySummary = { reviewsToday; learnedToday; totals: {learned, known, learning, new}; nextLearningInMs: number|null; streak }`.
+  - `renderAddPreview(items: {word; ipa; pos; translation; exampleEn; exampleRu; sourceUrl|null}[], previewId, lang)`.
+- Feedback copy (RU): grow `✅ {word} → через {after} (было {before})`; step `{word} → через {after}`; lapse `↻ {word} → через {after} · память сохранена ~{kept} дн.`; first (new graduated or Easy) `✅ {word} → через {after}`.
 
-- [ ] **Step 1:** Queue tests (pure): `test_due_learning_first`; `test_new_spread_among_reviews` (10 reviews, new_left 5 → new at every 2nd position); `test_respects_new_limit_zero`.
-- [ ] **Step 2:** Service tests with `frozen_now`:
-  - `test_full_learning_cycle`: start → front new card → show_answer intervals `{1:"<1м",2:"<6м",3:"<10м",4:"8д"}` → grade Again → next screen is `wait` if no other cards (wait ≈ 60s) → advance clock 61s → same card front again.
-  - `test_stale_callback_ignored` (Review Focus 2): grade with reps=0 twice → second returns `stale`, exactly one ReviewLog; after `undo`, pressing the old button with reps=1 → `stale`.
-  - `test_undo_restores_previous_state_and_streak_not_double_counted`.
-  - `test_sibling_buried_next_day` (direction both).
-  - `test_daily_new_limit_counts_local_day_with_4am_boundary`: user +03:00, new_per_day=2; 2 new at 03:30 local, at 03:50 local no new; at 04:10 local new allowed again.
-  - `test_grade_transaction_rolls_back_on_error` (monkeypatch ReviewLog insert to raise → card unchanged).
-- [ ] **Step 3:** Run → FAIL.
-- [ ] **Step 4:** Implement.
-- [ ] **Step 5:** Run `uv run pytest tests/review -v --cov=app/review` → PASS, ≥ 90%.
-- [ ] **Step 6:** Commit `feat(review): session queue, grading, undo`.
+- [ ] **Step 1:** Tests: `translation and example are inside tg-spoiler`; `keyboard is 2x2 with styles danger/none/success/primary and callbacks g:7:3:1..4 each ≤ 64 bytes`; `🔊 button only when hasAudio`; `html in word is escaped`; `source link shows hostname`; `feedback lapse line mentions kept days`; `ru and en have the same keys` (compile-time; plus runtime check of `Object.keys`).
+- [ ] **Step 2–4:** FAIL → implement → PASS.
+- [ ] **Step 5:** Commit `feat(bot): views with spoiler card, 2x2 grades, progress and feedback`.
 
-### Task 7: Users, onboarding, placement, settings
+### Task 6: Review service
 
-**Files:**
-- Create: `app/users/service.py`, `app/users/placement.py`, `tests/users/test_service.py`, `tests/users/test_placement.py`
+**Files:** Create `src/review/pick.ts`, `src/review/service.ts`, `test/review/pick.test.ts`, `test/review/service.test.ts`.
 
 **Interfaces:**
-- Produces: `local_day(tz_offset_min, now) -> date`; `local_time(tz_offset_min, now) -> time`; `offset_from_reported_hour(reported_hour: int, reported_minute_bucket: int, now: datetime) -> int` (returns minutes in [-720, +840], rounded to 30 min, choosing the offset that is closest to zero modulo 24h — handles midnight wrap); `async get_or_create(db, tg_id, tg_lang: str | None, now) -> User` (lang "ru" if tg_lang startswith "ru" or "uk"/"be"/"kk", else "en"); `async set_setting(db, user_id, key: Literal["lang","retention","new_per_day","remind_at","direction","autoplay"], value)` with validation (autoplay: bool — when true, `views`/handlers send the voice together with the front side; column `users.autoplay` is part of Task 3's initial schema) (retention ∈ {0.85,0.9,0.95}; new_per_day ∈ {5,10,20}; direction ∈ {"en_ru","ru_en","both"}); onboarding steps `"lang" → "placement" → "goal" → "remind" → "tz" → "deck" → None`, `async advance_onboarding(db, user, answer: str, now) -> str | None`. `placement.WORDS: list[tuple[str, int]]` (10 words, frequency rank), `placement.level(known: set[str]) -> Literal["A1","A2","B1","B2"]` (known count 0–2 A1, 3–5 A2, 6–8 B1, 9–10 B2).
-- [ ] **Step 1:** Tests: `test_offset_midnight_wrap` (Review Focus 1: now 21:30 UTC, user says 00:30 → +180); `test_offset_negative` (now 10:00 UTC, user says 05:00 → −300); `test_local_day_4am_boundary`; `test_lang_detection`; `test_setting_validation_rejects_bad_retention`; `test_placement_levels`.
-- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement. **Step 4:** Run → PASS.
+- Consumes: `Repo` (Task 3), `srs` (Task 2), `views` types (Task 5), `localDay/dayEndMs` from `src/users/service.ts` (if Task 7 not done yet, implement those two pure functions first in that file: `localDay(offsetMin, now) -> "YYYY-MM-DD"` with 04:00 boundary; `dayEndMs(offsetMin, now) -> number`).
+- Produces:
+  - `pick(c: Candidates, newLeft: number, now: number, mixCounter: number) -> {kind:"card", card} | {kind:"new", note} | null` — learning due first; then reviews/new interleaved (new every `ceil(reviews/newLeft)`-th slot); learn-ahead ≤ 60 000 ms when otherwise empty.
+  - `class ReviewService { constructor(repo, now) ; nextScreen(user) -> Screen ; grade(user, cardId, reps, rating) -> Screen ; undo(user) -> Screen ; daySummary(user) -> DaySummary }`
+  - `type Screen = { kind: "card"; view: CardView; counts; intervals; feedback: Feedback|null; canUndo } | { kind: "done"; summary: DaySummary } | { kind: "stale" } | { kind: "nothing" }` (`nothing` = no decks).
+  - `grade`: `reps` mismatch → `stale`; one `gradeBatch` with card update, review_log insert (`state_before` = full `Mem` JSON, `interval_before_days`, `interval_after_ms`), user update (streak: +1 if last day was yesterday-local, 1 if older, unchanged if today; `last_review_at`), `usage_daily` bump, sibling bury when direction `both`. Returns next screen with `feedback` computed from before/after `Mem`.
+  - `undo`: restore last non-undone log’s `state_before`, mark undone, restore streak fields saved in the log (`streak_before`, `last_study_day_before`, created in Task 3), return card screen for that card with `feedback: null`.
+- Budget: `grade` ≤ 4 D1 calls total (1 load, 1 batch write, 1–2 for next screen).
+
+- [ ] **Step 1:** Pick tests: `learning due first`; `new spread among reviews`; `learn-ahead within 60s`; `no learn-ahead beyond 60s → null`.
+- [ ] **Step 2:** Service tests (fake clock):
+  - `first card intervals are <1м <6м <10м 8д`.
+  - `again then card comes back immediately via learn-ahead when nothing else` (only one card in deck).
+  - `stale callback ignored` (Review Focus 2): grade reps=0 twice → second `stale`, one log row; after `undo`, old button (reps=1) → `stale`.
+  - `feedback grow shows before and after days` (card at 2d, Good on due → feedback `grow`, `beforeDays=2`, after ≥ 7d).
+  - `lapse feedback keeps memory` (Review Focus 3).
+  - `daily new limit uses 04:00 local boundary`.
+  - `day summary counts learned today and totals by stage`.
+  - `grade uses ≤ 4 D1 calls` (countingDb).
+- [ ] **Step 3–5:** FAIL → implement → PASS with coverage ≥ 90 %.
+- [ ] **Step 6:** Commit `feat(review): queue, grading, undo, feedback, day summary`.
+
+### Task 7: Users, onboarding, settings
+
+**Files:** Create `src/users/service.ts`, `src/users/placement.ts`, `test/users/*.test.ts`.
+
+**Interfaces:**
+- Produces: `langFromTelegram(code?: string): "ru"|"en"`; `offsetFromReported(h: number, m: number, now: number): number` (minutes, range [-720, 840], rounded to 30, midnight-safe); `localDay`, `dayEndMs`, `localMinutes(offset, now)`; `getOrCreate(repo, tgId, tgLang, now)`; onboarding steps `"lang"→"placement"→"goal"→"remind"→"tz"→"deck"→null` with `advance(repo, user, answer, now) -> OnboardingScreen`; `setSetting(repo, userId, key: "lang"|"retention"|"newPerDay"|"remindAt"|"direction"|"autoplay", value)` validated (retention ∈ {0.85,0.9,0.95}; newPerDay ∈ {5,10,20}; remindAt `HH:MM`; direction ∈ {en_ru, ru_en, both}); `placementLevel(known: number)`.
+- [ ] **Step 1:** Tests: `offset across midnight` (now 21:30 UTC, user 00:30 → 180); `negative offset` (10:00 UTC, user 05:00 → −300); `4am day boundary`; `lang detection`; `invalid retention rejected`; `placement levels 2/5/8/10 → A1/A2/B1/B2`.
+- [ ] **Step 2–4:** FAIL → implement → PASS.
 - [ ] **Step 5:** Commit `feat(users): onboarding, timezone, settings`.
 
-### Task 8: Content — catalog, dictionary, LLM, add word, AI decks, limits
+### Task 8: Content — links, dictionary, LLM, add words, AI decks, limits
 
-**Files:**
-- Create: `app/content/catalog.py`, `app/content/dictionary.py`, `app/content/llm.py`, `app/content/service.py`, `app/entitlements/service.py`, `tests/content/test_*.py`, `tests/entitlements/test_service.py`, `tests/fixtures/dictionary_serendipity.json`
+**Files:** Create `src/content/{links,dictionary,llm,service}.ts`, `src/entitlements/service.ts`, `test/content/*.test.ts`, `test/fixtures/dictionary-serendipity.json`.
 
 **Interfaces:**
 - Produces:
-  - `async load_catalog(db, dir: Path) -> int` — idempotent upsert of decks/notes from `data/decks` (by `(deck title_en)` and `(deck_id, word)`).
-  - `async subscribe(db, user_id, deck_id)`.
-  - `class DictionaryClient: async lookup(word: str) -> DictEntry | None` (`https://api.dictionaryapi.dev/api/v2/entries/en/{word}`; `DictEntry(ipa, pos, example_en, audio_url)`; 404 → None; 5s timeout).
-  - `class WordCard(BaseModel): word: str; ipa: str | None; pos: str; translation: str (non-empty, contains Cyrillic); example_en: str (no Cyrillic); example_ru: str (contains Cyrillic)`.
-  - `class LLMClient(providers): async complete_json(system: str, user: str, schema: type[T]) -> T` — tries providers in order; any HTTP error, timeout (20s), JSON parse error or validation error → next provider; all fail → `LLMUnavailable`.
-  - `async build_word_cards(words: list[str], dict_client, llm) -> list[WordCard | ManualNeeded]` — one LLM call for the whole batch (`{"cards":[WordCard...]}`), dictionary fills ipa/pos when LLM omits.
-  - `async add_words(db, user_id, cards: list[WordCard]) -> AddResult(added: list[str], duplicates: list[str])` — dedupe against user's "Мои слова" and every subscribed deck (case-insensitive, trimmed).
-  - `async generate_deck(db, user_id, topic: str, n: int, llm, now) -> DeckPreview` — n clamped to 10..30; creates `Deck(kind="ai", owner_id=user)` only on confirm via `confirm_ai_deck(db, user_id, preview_id) -> int`. Previews (both AI decks and add-word previews) are stored in table `previews(id, user_id, kind, payload JSONB, created_at)` — migration `0003_previews`; previews older than 24 h are ignored.
-  - `entitlements.check_and_consume(db, user_id, feature: Literal["gen"], now) -> bool` (3/day per local day).
-- [ ] **Step 1:** Tests (httpx mocked with `respx`): `test_dictionary_parses_fixture`; `test_llm_falls_back_on_malformed_json` (Review Focus 4: provider 1 returns `"not json"`, provider 2 valid → result from 2); `test_llm_rejects_cyrillic_in_example_en`; `test_llm_all_fail_raises`; `test_add_word_duplicate_in_catalog_deck` (Review Focus 3: user subscribed to A1 containing "apple", adds " Apple " → duplicates==["apple"], no new note); `test_load_catalog_idempotent`; `test_gen_limit_3_per_day_resets_at_local_4am`; `test_generate_deck_clamps_n`.
-- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement. **Step 4:** Run → PASS.
-- [ ] **Step 5:** Commit `feat(content): catalog, dictionary, LLM chain, add words, AI decks`.
+  - `parseWordsAndLinks(text: string, entities: MessageEntity[]) -> { items: {word: string; url: string|null}[]; orphanUrl: string|null }` — rules from spec §2.4: URLs from `url` entities (and raw `https?://` fallback), `text_link` on a word attaches its `url` to that word; same-line URL → that line’s word; standalone URL lines → applied to all words without a URL; message with only URLs → `items=[]`, `orphanUrl` = first; trailing `.,;:!?)` trimmed; non-http(s) or > 512 chars dropped; ≤ 20 items.
+  - `DictionaryClient.lookup(word) -> {ipa, pos, exampleEn, audioUrl} | null` (`https://api.dictionaryapi.dev/api/v2/entries/en/{word}`, 5 s timeout, 404 → null).
+  - `WordCardSchema` (zod): `word`, `ipa?`, `pos`, `translation` (non-empty, has Cyrillic), `exampleEn` (no Cyrillic), `exampleRu` (has Cyrillic).
+  - `LlmClient.completeJson<T>(system, user, schema) -> T` — providers in order; HTTP error / timeout 20 s / bad JSON / schema fail → next; all fail → `LlmUnavailable`.
+  - `ContentService.prepareAdd(user, text, entities, now) -> {kind:"ask-words"} | {kind:"preview"; previewId; items; duplicates: {word, deckTitle, linkAdded: boolean}[]; manual: string[]}` — uses pending URL if `items` came without links and pending is < 10 min old; duplicates get the link if they had none (no progress change).
+  - `ContentService.confirmAdd(user, previewId)`, `editPreviewTranslation(user, previewId, text)`, `generateDeck(user, topic, n, now)` (n clamped 10..30, requires `entitlements.consume("gen")`), `confirmDeck(user, previewId)`.
+  - `entitlements.consume(repo, user, "gen", now) -> boolean` (3 per local day).
+- [ ] **Step 1:** Link tests (Review Focus 1): `same-line url attaches to that word`; `standalone url attaches to all words`; `text_link on word`; `url-only message returns orphanUrl`; `trailing punctuation trimmed`; `ftp and javascript: dropped`; `two urls on one line → first wins`.
+- [ ] **Step 2:** Service tests (fetch mocked with `fetchMock` from vitest-pool-workers): `dictionary parses fixture`; `llm falls back on malformed json`; `llm rejects cyrillic in exampleEn`; `duplicate word in catalog deck not duplicated but gets link`; `pending url applied to next message words within 10 min, not after`; `gen limit 3 per local day`; `generateDeck clamps n`.
+- [ ] **Step 3–5:** FAIL → implement → PASS.
+- [ ] **Step 6:** Commit `feat(content): links, dictionary, LLM chain, custom words, AI decks`.
 
-### Task 9: TTS
+### Task 9: Audio
 
-**Files:**
-- Create: `app/tts/piper.py`, `app/tts/jobs.py`, `tests/tts/test_jobs.py`
-- Modify: `Dockerfile` (download Piper voice `en_US-lessac-medium` into `/models` at build), `app/review/service.py` (enqueue `tts` job with `dedup_key=f"tts:{note_id}"` when showing a note with `audio_file_id IS NULL`)
+**Files:** Create `scripts/voice-decks.ts`, `.github/workflows/voice-decks.yml`, `scripts/csv-to-sql.ts`, `test/content/audio.test.ts`; Modify `src/content/service.ts` (enqueue `voice` job for custom words with `audioUrl`), `src/jobs/` handler registration.
 
 **Interfaces:**
-- Produces: `class Synth(Protocol): def synth(text: str) -> bytes` (OGG/Opus); `PiperSynth(model_path)` (wav via piper → ogg via `ffmpeg -c:a libopus`); job handler `tts_job(payload={"note_id", "chat_id"})` → `bot.send_voice(ADMIN_TG_ID or chat, BufferedInputFile)` → store `voice.file_id` in `notes.audio_file_id`. Uploading once to the admin chat keeps user chats clean; afterwards `🔊` sends by `file_id`.
-- [ ] **Step 1:** Tests with fake synth + fake bot: `test_tts_job_stores_file_id`; `test_tts_job_skips_if_already_has_audio`; `test_showing_card_enqueues_tts_once`.
-- [ ] **Step 2–4:** FAIL → implement → PASS. Manual check: `docker compose run app python -c "from app.tts.piper import PiperSynth; open('/tmp/x.ogg','wb').write(PiperSynth('/models/en_US-lessac-medium.onnx').synth('serendipity'))"` produces a playable file.
-- [ ] **Step 5:** Commit `feat(tts): piper voice with file_id caching`.
-
-### Task 10: Reminders
-
-**Files:**
-- Create: `app/reminders/service.py`, `app/reminders/jobs.py`, `tests/reminders/test_service.py`, `tests/reminders/test_jobs.py`
-- Modify: migration `0004_reminder_marks` adds `users.last_daily_push_day: date | None`, `users.last_evening_push_day: date | None`, `users.last_step_ping_at: timestamptz | None`
-
-**Interfaces:**
-- Produces: `async tick(db, now) -> int` (enqueues push jobs; returns count). Rules:
-  - Daily: user active, `local_time >= remind_at`, `last_daily_push_day != local_day`, due count (learning+review due by end of local day + min(new_left, available new)) > 0 → enqueue `push_daily` with `dedup_key=f"daily:{user_id}:{local_day}"`, set `last_daily_push_day`. Catch-up: if tick missed, the condition `>=` still fires on next tick, and the mark prevents a second send (Review Focus 5).
-  - Evening: `local_time >= 20:00`, not studied today, `streak >= 2`, `last_evening_push_day != local_day`, not in quiet hours.
-  - Step ping: user has learning/relearning cards with `due <= now`, last review > 3 min ago, `last_step_ping_at` is None or < last_review, not quiet hours → one ping.
-  - `push_*` job handlers: send message with `Начать` button (`learn:start`); on `TelegramRetryAfter` re-enqueue at `now + retry_after`; on `TelegramForbiddenError` set `users.active=False`. Runner processes at most 25 push jobs per second (token bucket in `Runner`).
-- [ ] **Step 1:** Tests: `test_daily_push_sent_once_after_missed_tick` (ticks at 08:58 and 09:02 local, remind_at 09:00 → exactly one job; third tick 09:03 → none); `test_no_daily_push_when_nothing_due`; `test_evening_push_only_with_streak`; `test_step_ping_once_and_not_in_quiet_hours`; `test_forbidden_deactivates_user`; `test_retry_after_reschedules`.
+- `voice-decks.ts` (runs in GitHub Actions, manual dispatch): for each CSV row without `audio_file_id`: Piper → wav → `ffmpeg -c:a libopus -b:a 24k` → `sendVoice` to `ADMIN_TG_ID` → write `file_id` back to CSV; rate ≤ 20/s; resumable. `csv-to-sql.ts` → `migrations/0002_seed_catalog.sql` (idempotent `INSERT OR IGNORE`).
+- Runtime job `voice {noteId, audioUrl}` → `sendVoice(ADMIN_TG_ID, audioUrl)` → `setNoteAudio(noteId, voice.file_id)`; on failure after 3 attempts note stays without audio.
+- 🔊 callback `v:<noteId>` → `sendVoice(chat, file_id)`; bot deletes the previous voice message it sent in this chat (`sessions.last_voice_message_id`, created in Task 3) to keep the chat clean.
+- [ ] **Step 1:** Tests: `voice job stores file_id`; `voice button sends by file_id and deletes previous voice`; `csv-to-sql escapes quotes`.
 - [ ] **Step 2–4:** FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(reminders): daily, evening and learning-step pushes`.
+- [ ] **Step 5:** Commit `feat(audio): prebuilt catalog voices and dictionary audio`.
 
-### Task 11: Handlers and app wiring
+### Task 10: Reminders (cron)
 
-**Files:**
-- Create: `app/bot/handlers/{start,learn,words,decks,settings,stats}.py`, `app/stats/service.py`, `app/main.py`, `tests/bot/test_handlers.py`
+**Files:** Create `src/reminders/service.ts`, `src/tg/client.ts`, `test/reminders/service.test.ts`.
 
 **Interfaces:**
-- Consumes: all services above.
-- Produces:
-  - Commands: `/start`, `/learn`, `/decks`, `/gen <тема>`, `/stats`, `/settings`, `/undo`, `/help`; bot menu commands set via `set_my_commands` for ru and en.
-  - Callback prefixes: `learn:start`, `a:<card_id>` (show answer), `g:…` (grade), `u` (undo), `v:<note_id>` (voice), `now` (show waiting card), `ob:<step>:<value>` (onboarding), `set:<key>:<value>`, `deck:sub:<id>`, `add:ok|edit|no:<preview_id>`, `gen:ok|no:<preview_id>`.
-  - Plain text (not a command, onboarding finished) → add-words flow (split lines, ≤ 20).
-  - Session message: always edit `sessions.message_id`; on `TelegramBadRequest` ("message is not modified" → ignore; "message to edit not found" / older than 48h → send new message and store its id).
-  - `stats.text_stats(db, user_id, now) -> Stats(streak, learned (state review with stability ≥ 21d), due_today, reviews_30d, retention_30d (share of rating>1 on review-state logs))`.
-  - `main.py`: build Bot/Dispatcher, register routers, `load_catalog` at startup, background tasks `scheduler_loop` (every 60 s aligned to minute: `reminders.tick`) and `runner_loop` (every 1 s `Runner.run_once`), `dp.start_polling(allowed_updates=["message","callback_query"])`, graceful shutdown on SIGTERM.
-- [ ] **Step 1:** Tests using aiogram test utilities with a fake session (`MockedBot` pattern: capture requests, return canned responses): `test_start_runs_onboarding_to_first_card`; `test_grade_callback_edits_same_message`; `test_text_message_triggers_add_words_preview`; `test_edit_failure_sends_new_message`; `test_stats_text`.
+- Produces: `tick(env, now) -> {sent: number}`:
+  - Daily: active user, `localMinutes >= remindAt`, `last_daily_push_day != localDay`, due+new-left > 0 → send `⏰ …` with `▶ Начать` (`learn`), set `last_daily_push_day`. Missed ticks catch up; the mark prevents doubles.
+  - Evening, step ping — rules from Global Constraints and spec §2.6 / §2.2.
+  - At most 35 sends per tick, users ordered by `remind_at`, remainder next minute; claim and run due `jobs` within the same budget.
+  - `TgClient.send(method, body)`: on 429 → enqueue `push` at `now + retry_after*1000`; on 403 → `users.active = 0`.
+- [ ] **Step 1:** Tests: `missed tick sends exactly one daily push` (Review Focus 4: ticks at 08:58 and 09:01 local, then 09:02 → total 1); `no push when nothing due`; `evening only with streak ≥ 2`; `step ping once, not in quiet hours`; `35 sends cap, rest next tick`; `403 deactivates`; `429 reschedules`; `tick uses ≤ 10 D1 calls`.
 - [ ] **Step 2–4:** FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(bot): handlers and application wiring`.
+- [ ] **Step 5:** Commit `feat(reminders): cron reminders within free-tier budget`.
 
-### Task 12: Admin, backups, deck data, deploy
+### Task 11: Bot wiring, stats, admin
 
-**Files:**
-- Create: `app/admin/service.py`, `app/bot/handlers/admin.py`, `scripts/build_decks.py`, `data/decks/*.csv`, `data/decks/index.json`, `deploy.sh`, `README.md`, `tests/admin/test_service.py`, `tests/e2e/test_scenario.py`
+**Files:** Create `src/bot/bot.ts`, `src/bot/handlers/*.ts`, `src/stats/service.ts`, `src/admin/service.ts`, `scripts/set-webhook.ts`, `test/bot/handlers.test.ts`, `test/stats/service.test.ts`; Modify `src/index.ts`.
 
 **Interfaces:**
-- Produces: admin-only (tg_id == ADMIN_TG_ID) `/admin stats` (DAU, reviews 24h, new users 24h, failed jobs 24h); document upload of `*.csv` with caption `deck: <title_ru> | <title_en> | <level>` → `load_deck_csv`; daily 03:00 UTC `backup` job: `pg_dump --format=custom | gzip` → `send_document` to admin (Telegram 50 MB bot upload limit — if larger, split into 45 MB parts). `scripts/build_decks.py --level A1 --n 500 --out data/decks/a1.csv` uses `LLMClient` + `DictionaryClient`, resumes from existing CSV, writes rows that validate as `WordCard`.
-- Deck sizes: A1 500, A2 500, B1 600, B2 600, travel 250, it_work 300, phrases 250 (≈ 3 000).
-- [ ] **Step 1:** Tests: `test_non_admin_cannot_use_admin_commands`; `test_csv_upload_loads_deck`; `test_backup_splits_large_dump` (fake dump 100 MB → 3 parts).
-- [ ] **Step 2:** E2E scenario `tests/e2e/test_scenario.py::test_first_day_and_next_day` (spec §8): onboarding → 10 cards graded Good/Again mix → Again card reappears after 61 s → next day 09:00 local exactly one push → `/learn` shows due reviews.
-- [ ] **Step 3–4:** FAIL → implement → PASS; run `uv run pytest --cov` → overall ≥ 70%.
-- [ ] **Step 5:** Generate decks: `uv run python scripts/build_decks.py --all`; spot-check 30 random rows per deck by hand (translation correct, example natural). Commit data.
-- [ ] **Step 6:** `deploy.sh`: ssh-less, run on VPS — `git pull && docker compose up -d --build && docker compose logs --tail=50 app`. README: VPS setup (Ubuntu 24.04, Docker install, `.env` fill-in with @BotFather token, Groq key, OpenRouter key, admin id via @userinfobot).
-- [ ] **Step 7:** Smoke on a real test bot: `/start` → full onboarding → 5 cards → buttons colored, intervals `<1м <6м <10м 4д` on a new card.
-- [ ] **Step 8:** Commit `feat: admin, backups, decks, deploy`.
+- `index.ts`: `fetch` — `POST /tg/<any>` with header `X-Telegram-Bot-Api-Secret-Token === WEBHOOK_SECRET` else 401; `webhookCallback(bot, "cloudflare-mod")`; `scheduled` → `reminders.tick`. Bot instance and FSRS schedulers created once per isolate.
+- Commands: `/start /learn /decks /gen /stats /settings /undo /help`, `setMyCommands` for ru/en in `set-webhook.ts`.
+- Callbacks: `learn`, `g:…`, `u`, `v:<noteId>`, `ob:<step>:<value>`, `set:<key>`, `sub:<deckId>`, `add:ok|edit|no:<previewId>`, `gen:ok|no:<previewId>`.
+- Text (onboarding finished, not a command) → `prepareAdd` (reply “Ищу…”, heavy work in `ctx.waitUntil`, then edit that message with the preview).
+- Session message: edit `sessions.message_id`; “message is not modified” ignored; “message to edit not found” → send new and save id; when other messages were sent after it, send a new session message and edit the old one to `Сессия продолжается ниже ↓`.
+- Error boundary: any D1 error whose message contains `daily row` → reply `t("maintenance")` and return 200 (Review Focus 5); other errors logged, 200 returned (Telegram must not retry).
+- `stats.cumulative(repo, user, now) -> { streak; learned; known; learning; new; reviewsTotal; reviews30; retention30; forecast7: number[] }`; view renders it as text.
+- `admin`: `/admin stats` (active today, reviews today, `usage_daily` vs limits in %), CSV document upload with caption `deck: <title_ru> | <title_en> | <level>`; when `rows_written_est` crosses 80 % of 100 000, one message to admin per day.
+- [ ] **Step 1:** Handler tests (grammY with `fakeTelegram` transformer): `start runs onboarding to first card`; `grade edits same message and shows feedback`; `text with link → preview shows 🔗 host`; `url-only message asks for words`; `stale button answers callback with toast`; `D1 limit error → maintenance reply and 200`; `bad secret → 401`.
+- [ ] **Step 2:** Stats test: `cumulative totals by stage and retention30`.
+- [ ] **Step 3–5:** FAIL → implement → PASS.
+- [ ] **Step 6:** Commit `feat(bot): webhook, handlers, stats, admin`.
+
+### Task 12: Decks, deploy, backups, end-to-end
+
+**Files:** Create `scripts/build-decks.ts`, `data/decks/*.csv`, `data/decks/index.json`, `.github/workflows/{deploy.yml,backup.yml}`, `README.md`, `test/e2e/scenario.test.ts`.
+
+**Interfaces:**
+- `build-decks.ts --deck a1 --n 500` — frequency list + `LlmClient` + `DictionaryClient`, resumable, rows validated with `WordCardSchema`. Sizes: A1 500, A2 500, B1 600, B2 600, travel 250, it_work 300, phrases 250.
+- `deploy.yml` on push to `main`: `pnpm test`, `wrangler d1 migrations apply DB --remote`, `wrangler deploy` (secret `CLOUDFLARE_API_TOKEN`). `backup.yml` weekly: `wrangler d1 export DB --remote --output backup.sql` → upload artifact (retention 90 days).
+- README (Russian): create Cloudflare account (free, no card), create D1, `wrangler secret put …`, get bot token from @BotFather, Groq and OpenRouter keys, `pnpm set-webhook`, run `voice-decks` workflow once.
+- [ ] **Step 1:** E2E `first day and next day`: onboarding → 10 grades (mix Good/Again) → Again card returns → done screen shows `Сегодня:` and totals → next day 09:00 local exactly one push → `/learn` card shows larger `память` than yesterday for a word graded Good twice.
+- [ ] **Step 2:** FAIL → implement glue → PASS; `pnpm test --coverage` overall ≥ 70 %.
+- [ ] **Step 3:** Build decks, spot-check 30 random rows per deck (translation correct, example natural), commit CSV and generated seed SQL.
+- [ ] **Step 4:** Deploy to a test bot; smoke: onboarding, one card shows spoiler + 2×2 buttons `Снова <1м / Трудно <6м / Хорошо <10м / Легко 8д`, add `resilient https://example.com/article` → card shows `🔗 example.com`.
+- [ ] **Step 5:** Commit `feat: decks, deploy pipeline, backups, e2e`.

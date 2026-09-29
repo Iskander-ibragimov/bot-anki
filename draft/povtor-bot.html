@@ -11,6 +11,7 @@
   --danger:#DD5147; --success:#3E9F55; --primary:#2F8AE0;
   --quote:#2F8AE0; --toast:rgba(20,28,36,.88);
   --c-new:#2F8AE0; --c-learn:#DD5147; --c-rev:#3E9F55;
+  --spoil:#DCE2E7; --spoil-dot:#9AA6B1;
   --f-ui: -apple-system, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
   --f-panel: "Onest", "Segoe UI", system-ui, sans-serif;
   --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
@@ -18,11 +19,11 @@
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
   --page:#0B1117; --panel:#131C25; --ink:#E4EBF1; --muted:#8C9AA7; --line:#24313D;
   --accent:#5AA2E8; --wall:#0E1621; --bubble:#182533; --mine:#2B5278; --bar:#17212B; --bar-ink:#E4EBF1; --meta:#6D8196;
-  --kb:rgba(255,255,255,.09); --kb-ink:#FFFFFF; --quote:#5AA2E8; --toast:rgba(0,0,0,.85); color-scheme:dark}}
+  --kb:rgba(255,255,255,.09); --kb-ink:#FFFFFF; --quote:#5AA2E8; --toast:rgba(0,0,0,.85); --spoil:#26374A; --spoil-dot:#6D8196; color-scheme:dark}}
 :root[data-theme="dark"]{
   --page:#0B1117; --panel:#131C25; --ink:#E4EBF1; --muted:#8C9AA7; --line:#24313D;
   --accent:#5AA2E8; --wall:#0E1621; --bubble:#182533; --mine:#2B5278; --bar:#17212B; --bar-ink:#E4EBF1; --meta:#6D8196;
-  --kb:rgba(255,255,255,.09); --kb-ink:#FFFFFF; --quote:#5AA2E8; --toast:rgba(0,0,0,.85); color-scheme:dark}
+  --kb:rgba(255,255,255,.09); --kb-ink:#FFFFFF; --quote:#5AA2E8; --toast:rgba(0,0,0,.85); --spoil:#26374A; --spoil-dot:#6D8196; color-scheme:dark}
 html,body{height:100%}
 body{background:var(--page);color:var(--ink);font-family:var(--f-panel);padding-inline:16px;padding-block:24px;box-sizing:border-box}
 *{box-sizing:border-box}
@@ -45,6 +46,11 @@ body{background:var(--page);color:var(--ink);font-family:var(--f-panel);padding-
 .bub blockquote{margin:4px 0;padding:2px 0 2px 8px;border-left:3px solid var(--quote);font-style:normal}
 .bub blockquote i{display:block}
 .bub code{font-family:var(--f-mono);font-size:13px}
+.bub a{color:var(--accent);text-decoration:none}
+.spoiler{color:transparent;background-color:var(--spoil);background-image:radial-gradient(var(--spoil-dot) 1px,transparent 1.3px);background-size:4px 4px;border-radius:4px;cursor:pointer;transition:color .2s}
+.spoiler.open{color:inherit;background:none;cursor:text}
+.fb{color:var(--muted)}
+.prog{color:var(--muted);font-size:14px}
 .bub .sp{display:block;height:4px}
 .kb{display:flex;flex-direction:column;gap:4px}
 .kb .row{display:flex;gap:4px}
@@ -57,9 +63,9 @@ body{background:var(--page);color:var(--ink);font-family:var(--f-panel);padding-
 .voice .play{width:36px;height:36px;border-radius:50%;background:var(--accent);border:0;color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
 .wave{display:flex;align-items:center;gap:2px;height:22px;flex:1}
 .wave i{width:3px;border-radius:2px;background:var(--accent);opacity:.7}
-.bar{display:flex;align-items:center;gap:8px;padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px));background:var(--bar);border-top:1px solid var(--line);position:relative}
+.bar{display:flex;align-items:flex-end;gap:8px;padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px));background:var(--bar);border-top:1px solid var(--line);position:relative}
 .menu-btn{border:0;background:var(--accent);color:#fff;border-radius:16px;padding:7px 11px;font:600 13px var(--f-ui);cursor:pointer;display:flex;gap:5px;align-items:center}
-.bar input{flex:1;min-width:0;border:0;background:transparent;color:var(--bar-ink);font:15px var(--f-ui);padding:8px 4px;outline:none}
+.bar textarea{flex:1;min-width:0;border:0;background:transparent;color:var(--bar-ink);font:15px/1.35 var(--f-ui);padding:8px 4px;outline:none;resize:none;max-height:120px;overflow-y:auto}
 .send{border:0;background:none;color:var(--accent);cursor:pointer;padding:6px;display:grid;place-items:center}
 .startbar{padding:10px 10px calc(10px + env(safe-area-inset-bottom,0px));background:var(--bar);border-top:1px solid var(--line)}
 .startbar button{width:100%;border:0;background:none;color:var(--accent);font:600 15px var(--f-ui);letter-spacing:.06em;padding:10px;cursor:pointer}
@@ -130,12 +136,12 @@ body{background:var(--page);color:var(--ink);font-family:var(--f-panel);padding-
     <div class="box">
       <p class="lbl">Что попробовать</p>
       <ol class="steps">
-        <li>Нажмите «Старт» и пройдите онбординг (или кнопку «Пропустить онбординг» ниже).</li>
-        <li>На новой карточке «Показать ответ»: кнопки <code>Снова &lt;1м</code> <code>Трудно &lt;6м</code> <code>Хорошо &lt;10м</code> <code>Легко 8д</code>.</li>
-        <li>Нажмите «Снова» и подождите: карточка вернётся через минуту в той же сессии.</li>
-        <li>Напишите в чат слово, например <code>resilient</code>, или несколько через перенос строки.</li>
-        <li>Команда <code>/gen собеседование в IT</code> соберёт колоду.</li>
-        <li>«До завтра 09:00»: придёт напоминание с числом карточек.</li>
+        <li>Нажмите «Старт» и пройдите онбординг (или «Пропустить онбординг» ниже).</li>
+        <li>На карточке сразу 4 кнопки: <code>Снова &lt;1м</code> <code>Трудно &lt;6м</code> <code>Хорошо &lt;10м</code> <code>Легко 8д</code>. Перевод под спойлером — тапните, чтобы проверить себя.</li>
+        <li>После оценки сверху следующей карточки видно, куда ушло слово: «через 2 дн. (было …)».</li>
+        <li>Напишите в чат <code>resilient https://example.com/article</code> — ссылка прикрепится к карточке.</li>
+        <li>Пришлите одну ссылку, а следующим сообщением слова — ссылка достанется всем.</li>
+        <li>Жмите «До завтра 09:00» несколько раз и повторяйте: интервалы растут, <code>/stats</code> копит итог.</li>
       </ol>
     </div>
 
@@ -241,9 +247,9 @@ const GEN={
 /* ---------- i18n ---------- */
 const T={
  ru:{status:'бот',typing:'печатает…',again:'Снова',hard:'Трудно',good:'Хорошо',easy:'Легко',show:'Показать ответ',speak:'🔊 Озвучить',undo:'↩️ Отменить',
-  intro:'Учу английские слова по методу интервальных повторений, как Anki. Готовые колоды A1–B2, свои слова и AI-колоды. Одно напоминание в день.',introT:'Что умеет этот бот?',start:'СТАРТ',ph:'Сообщение или слово…',menu:'Меню'},
+  intro:'Учу английские слова по методу интервальных повторений, как Anki. Готовые колоды A1–B2, свои слова и AI-колоды. Одно напоминание в день.',introT:'Что умеет этот бот?',start:'СТАРТ',ph:'Слово или /команда',menu:'Меню'},
  en:{status:'bot',typing:'typing…',again:'Again',hard:'Hard',good:'Good',easy:'Easy',show:'Show answer',speak:'🔊 Listen',undo:'↩️ Undo',
-  intro:'I teach English words with spaced repetition, like Anki. Ready decks A1–B2, your own words and AI decks. One reminder a day.',introT:'What can this bot do?',start:'START',ph:'Message or word…',menu:'Menu'}
+  intro:'I teach English words with spaced repetition, like Anki. Ready decks A1–B2, your own words and AI decks. One reminder a day.',introT:'What can this bot do?',start:'START',ph:'Word or /command',menu:'Menu'}
 };
 const tt=k=>T[S.lang][k];
 const ru=()=>S.lang==='ru';
@@ -258,7 +264,7 @@ function fresh(){
     decks:[],deckNotes:byDeck,cards:[],cid:1,msgs:[],mid:1,sess:null,undo:null,streak:0,lastDay:null,newDone:{},log:[],pushDay:null,eveDay:null,lastPing:0,lastReview:0,
     gens:{},prev:{},pid:1,editing:null,typing:false,voiceMsg:null,mix:0,customDecks:[]};
 }
-function addNote(deck,r){const id=nid++;NOTES[id]={id,deck,word:r[0],ipa:r[1],pos:r[2],tr:r[3],exEn:r[4],exRu:r[5]};return id}
+function addNote(deck,r){const id=nid++;NOTES[id]={id,deck,word:r[0],ipa:r[1],pos:r[2],tr:r[3],exEn:r[4],exRu:r[5],url:r[6]||null};return id}
 const pad=n=>String(n).padStart(2,'0');
 const loc=ms=>new Date(ms+S.off*MIN);
 const dayKey=ms=>new Date(ms+S.off*MIN-4*36e5).toISOString().slice(0,10);
@@ -309,21 +315,39 @@ function nextLearnDue(){const l=active().filter(c=>c.state==='learning'||c.state
 
 /* ---------- session rendering ---------- */
 function countsLine(){const c=counts();return `🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`}
-function cardBody(c,back){
-  const n=NOTES[c.note];
-  const en=`<b>${esc(n.word)}</b>\n${esc(n.ipa)} · <i>${esc(n.pos)}</i>`;
-  const tr=`<b>${esc(n.tr)}</b>`;
-  const ex=`<blockquote><i>${esc(n.exEn)}</i>${esc(n.exRu)}</blockquote>`;
-  const head=countsLine()+'<span class="sp"></span>';
-  if(c.dir==='en_ru') return head+en+(back?`\n\n${tr}${ex}`:'');
-  return head+tr+(back?`\n\n${en}${ex}`:`\n<i>${ru()?'Вспомните слово по-английски':'Recall the English word'}</i>`);
+const ivlOf=c=>c.state==='review'&&c.last!=null?Math.round((c.due-c.last)/DAY):0;
+function memDays(c){return c.state==='review'?ivlOf(c):c.state==='relearning'?Math.max(1,Math.round(c.S)):0}
+function stageOf(c){if(c.state==='new')return 'new';if(c.state!=='review')return 'learning';const d=ivlOf(c);return d>=21?'learned':d>=7?'known':'learning'}
+const STAGE={ru:{new:'🌱 Новое',learning:'🌿 Учу',known:'🌳 Знаю',learned:'🏆 Выучено'},en:{new:'🌱 New',learning:'🌿 Learning',known:'🌳 Known',learned:'🏆 Learned'}};
+function fmtLong(ms){const L=ru();const m=Math.round(ms/MIN);if(m<60)return Math.max(1,m)+(L?' мин':' min');const h=Math.round(ms/36e5);if(h<24)return h+(L?' ч':' h');
+  const d=Math.round(ms/DAY);if(d<30)return d+(L?' дн.':' d');const mo=(Math.round(d/3)/10).toString().replace('.',L?',':'.');return mo+(L?' мес.':' mo')}
+const host=u=>{try{return new URL(u).hostname.replace(/^www\./,'')}catch(e){return u}};
+function progressLine(c){
+  const st=STAGE[S.lang][stageOf(c)],m=memDays(c);
+  let s=st;if(m)s+=ru()?` · память ~${m} дн.`:` · memory ~${m} d`;
+  if(c.reps)s+=ru()?` · повтор №${c.reps+1}`:` · review #${c.reps+1}`;
+  return `<span class="prog">${s}</span>`;
 }
-function frontKb(c){return [[B(tt('speak'),'v:'+c.note),B(tt('show'),'a:'+c.id,'primary')]]}
-function backKb(c){
+function cardBody(c,fb){
+  const n=NOTES[c.note];const sp=x=>`<span class="spoiler">${x}</span>`;
+  const head=countsLine()+'<span class="sp"></span>'+(fb?`<span class="fb">${fb}</span>\n`:'');
+  const ex=`<blockquote>${sp(`<i>${esc(n.exEn)}</i>${esc(n.exRu)}`)}</blockquote>`;
+  const hasEx=!!n.exEn;
+  let body;
+  if(c.dir==='en_ru')body=`<b>${esc(n.word)}</b>\n${n.ipa?esc(n.ipa)+' · ':''}<i>${esc(n.pos)}</i>\n${sp('<b>'+esc(n.tr)+'</b>')}`+(hasEx?ex:'\n');
+  else body=`<b>${esc(n.tr)}</b>\n${sp('<b>'+esc(n.word)+'</b>'+(n.ipa?' '+esc(n.ipa):''))}`+(hasEx?ex:'\n');
+  const link=n.url?`\n🔗 <a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(host(n.url))}</a>`:'';
+  return head+body+progressLine(c)+link;
+}
+function cardKb(c){
   const p={};for(const g of [1,2,3,4])p[g]=fmt(sched(c,g,S.now,S.ret).due-S.now);
-  const row2=[B(tt('speak'),'v:'+c.note)];if(S.undo)row2.push(B(tt('undo'),'u'));
-  return [[B(`${tt('again')} ${p[1]}`,`g:${c.id}:${c.reps}:1`,'danger'),B(`${tt('hard')} ${p[2]}`,`g:${c.id}:${c.reps}:2`),B(`${tt('good')} ${p[3]}`,`g:${c.id}:${c.reps}:3`,'success'),B(`${tt('easy')} ${p[4]}`,`g:${c.id}:${c.reps}:4`,'primary')],row2];
+  const row3=[B(tt('speak'),'v:'+c.note)];if(S.undo)row3.push(B(tt('undo'),'u'));
+  return [[B(`${tt('again')} ${p[1]}`,`g:${c.id}:${c.reps}:1`,'danger'),B(`${tt('hard')} ${p[2]}`,`g:${c.id}:${c.reps}:2`)],
+          [B(`${tt('good')} ${p[3]}`,`g:${c.id}:${c.reps}:3`,'success'),B(`${tt('easy')} ${p[4]}`,`g:${c.id}:${c.reps}:4`,'primary')],row3];
 }
+function showCard(c,fb){const s=S.sess;s.card=c.id;s.side='card';edit(s.msg,cardBody(c,fb),cardKb(c));if(S.autoplay)voice(c.note)}
+function totals(){const d=S.dir==='ru_en'?'ru_en':'en_ru';const a=S.cards.filter(c=>S.decks.includes(c.deck)&&c.dir===d);
+  const t={learned:0,known:0,learning:0,new:0};for(const c of a)t[stageOf(c)]++;return t}
 function ensureSessionMsg(){
   const last=S.msgs[S.msgs.length-1];
   if(S.sess&&S.msgs.some(m=>m.id===S.sess.msg)){
@@ -335,20 +359,19 @@ function ensureSessionMsg(){
   void last;
 }
 function startSession(){if(!S.decks.length){bot(ru()?'Сначала добавьте колоду: /decks':'Add a deck first: /decks');return}ensureSessionMsg();showNext()}
-function showNext(){
-  const c=pick();const s=S.sess;
-  if(c){s.card=c.id;s.side='front';s.wait=null;edit(s.msg,cardBody(c,false),frontKb(c));if(S.autoplay)voice(c.note);return}
+function showNext(fb){
+  const s=S.sess;let c=pick();
   const nl=nextLearnDue();
-  if(nl!==null&&nl-S.now<60e3){s.card=null;s.side='wait';s.wait=nl;renderWait();return}
-  s.card=null;s.side='done';s.wait=null;
-  const today=S.log.filter(x=>dayKey(x.t)===dayKey(S.now)).length;
-  let txt=ru()?`✅ <b>На сейчас всё!</b>\nПовторено сегодня: ${today}`:`✅ <b>All done for now!</b>\nReviewed today: ${today}`;
-  if(nl!==null)txt+=ru()?`\nКарточки на закреплении вернутся через ${fmt(nl-S.now).replace('<','')}. Я напомню.`:`\nLearning cards return in ${fmt(nl-S.now).replace('<','')}. I’ll ping you.`;
-  else if(S.streak>0)txt+=ru()?`\n🔥 Серия: ${S.streak} дн.`:`\n🔥 Streak: ${S.streak} d`;
+  if(!c&&nl!==null&&nl-S.now<=60e3){c=active().filter(x=>(x.state==='learning'||x.state==='relearning')).sort((a,b)=>a.due-b.due)[0]}
+  if(c){showCard(c,fb);return}
+  s.card=null;s.side='done';
+  const day=dayKey(S.now),todayLogs=S.log.filter(x=>dayKey(x.t)===day),learnedToday=todayLogs.filter(x=>x.learnedNow).length,t=totals();
+  let txt=(fb?`<span class="fb">${fb}</span>\n`:'')+(ru()?`✅ <b>На сейчас всё!</b>\nСегодня: ${todayLogs.length} повт. · +${learnedToday} выучено\nВсего: 🏆 ${t.learned} · 🌳 ${t.known} · 🌿 ${t.learning} · 🌱 ${t.new}`:
+    `✅ <b>All done for now!</b>\nToday: ${todayLogs.length} reviews · +${learnedToday} learned\nTotal: 🏆 ${t.learned} · 🌳 ${t.known} · 🌿 ${t.learning} · 🌱 ${t.new}`);
+  if(nl!==null)txt+=ru()?`\n\nКарточки на закреплении вернутся через ${fmtLong(nl-S.now)}. Я напомню.`:`\n\nLearning cards return in ${fmtLong(nl-S.now)}. I’ll ping you.`;
+  if(S.streak>0)txt+=ru()?`\n🔥 Серия: ${S.streak} дн.`:`\n🔥 Streak: ${S.streak} d`;
   edit(s.msg,txt,[[B(ru()?'➕ Добавить слова':'➕ Add words','help:add'),B(ru()?'📚 Колоды':'📚 Decks','decks')]]);
 }
-function renderWait(){const s=S.sess;const sec=Math.max(1,Math.ceil((s.wait-S.now)/1000));
-  edit(s.msg,countsLine()+'<span class="sp"></span>'+(ru()?`⏳ Следующая карточка через <b>${sec} сек</b>\nОна на шаге закрепления, как в Anki.`:`⏳ Next card in <b>${sec} s</b>\nIt is on a learning step, like in Anki.`),[[B(ru()?'Показать сейчас':'Show now','now','primary')]])}
 function voice(noteId){
   const n=NOTES[noteId];
   if(S.voiceMsg){S.msgs=S.msgs.filter(m=>m.id!==S.voiceMsg)}
@@ -361,22 +384,27 @@ function grade(id,reps,g){
   if(!c||c.reps!==reps||!S.sess||S.sess.card!==id){toast(ru()?'Эта кнопка уже неактуальна':'This button is outdated');return}
   const day=dayKey(S.now);
   S.undo={card:{...c},streak:S.streak,lastDay:S.lastDay,newDone:{...S.newDone},logLen:S.log.length,buried:S.cards.filter(x=>x.note===c.note&&x.id!==c.id).map(x=>[x.id,x.buried])};
-  const wasNew=c.state==='new', before=c.state;
+  const wasNew=c.state==='new', before=c.state, beforeMem=memDays(c), beforeStage=stageOf(c);
   Object.assign(c,sched(c,g,S.now,S.ret));
   if(wasNew)S.newDone[day]=(S.newDone[day]||0)+1;
-  S.log.push({t:S.now,g,state:before});
+  S.log.push({t:S.now,g,state:before,learnedNow:beforeStage!=='learned'&&stageOf(c)==='learned'});
+  const w=`<b>${esc(NOTES[c.note].word)}</b>`,after=fmtLong(c.due-S.now);
+  let fb;
+  if(before==='review'&&c.state==='relearning')fb=ru()?`↻ ${w} → через ${after} · память сохранена ~${memDays(c)} дн.`:`↻ ${w} → in ${after} · memory kept ~${memDays(c)} d`;
+  else if(c.state==='review'&&before==='review')fb=ru()?`✅ ${w} → через ${after} (было ${beforeMem} дн.)`:`✅ ${w} → in ${after} (was ${beforeMem} d)`;
+  else if(c.state==='review')fb=ru()?`✅ ${w} → через ${after}`:`✅ ${w} → in ${after}`;
+  else fb=ru()?`${w} → через ${after}`:`${w} → in ${after}`;
   if(S.lastDay!==day){const y=dayKey(S.now-DAY);S.streak=S.lastDay===y?S.streak+1:1;S.lastDay=day}
   if(S.dir==='both')for(const o of S.cards)if(o.note===c.note&&o.id!==c.id&&o.state!=='learning'&&o.state!=='relearning')o.buried=day;
   S.lastReview=S.now;
-  showNext();renderState();
+  showNext(fb);renderState();
 }
 function undo(){
   if(!S.undo){toast(ru()?'Нечего отменять':'Nothing to undo');return}
   const u=S.undo;const c=S.cards.find(x=>x.id===u.card.id);Object.assign(c,u.card);
   S.streak=u.streak;S.lastDay=u.lastDay;S.newDone=u.newDone;S.log.length=u.logLen;
   for(const [id,b] of u.buried){const o=S.cards.find(x=>x.id===id);if(o)o.buried=b}
-  S.undo=null;ensureSessionMsg();S.sess.card=c.id;S.sess.side='front';S.sess.wait=null;
-  edit(S.sess.msg,cardBody(c,false),frontKb(c));toast(ru()?'Оценка отменена':'Rating undone');renderState();
+  S.undo=null;ensureSessionMsg();showCard(c,null);toast(ru()?'Оценка отменена':'Rating undone');renderState();
 }
 
 /* ---------- onboarding ---------- */
@@ -415,11 +443,12 @@ function decksMsg(){
   bot((ru()?'📚 <b>Колоды</b>\n\n':'📚 <b>Decks</b>\n\n')+lines.join('\n')+(ru()?'\n\n<i>Своя AI-колода: /gen тема</i>':'\n\n<i>Your own AI deck: /gen topic</i>'),kb);
 }
 function statsMsg(){
-  const a=S.cards.filter(c=>S.decks.includes(c.deck));const learned=a.filter(c=>c.state==='review'&&c.S>=21).length;
-  const rev=S.log.filter(x=>x.state==='review');const ret=rev.length?Math.round(100*rev.filter(x=>x.g>1).length/rev.length)+'%':'—';
-  const c=counts();
-  bot(ru()?`📊 <b>Статистика</b>\n\n🔥 Серия: ${S.streak} дн.\n📚 Выучено слов: ${learned}\n<i>интервал ≥ 21 дня</i>\n🗓 К повтору сегодня: ${c.r+c.l}\n🆕 Новых осталось: ${c.n}\n🔁 Повторов всего: ${S.log.length}\n🎯 Удержание: ${ret}`:
-    `📊 <b>Stats</b>\n\n🔥 Streak: ${S.streak} d\n📚 Words learned: ${learned}\n<i>interval ≥ 21 days</i>\n🗓 Due today: ${c.r+c.l}\n🆕 New left: ${c.n}\n🔁 Total reviews: ${S.log.length}\n🎯 Retention: ${ret}`);
+  const t=totals();const rev=S.log.filter(x=>x.state==='review');const ret=rev.length?Math.round(100*rev.filter(x=>x.g>1).length/rev.length)+'%':'—';
+  const d=S.dir==='ru_en'?'ru_en':'en_ru';const a=S.cards.filter(c=>S.decks.includes(c.deck)&&c.dir===d&&c.state!=='new');
+  const mem=a.reduce((s,c)=>s+memDays(c),0);
+  const fc=[];for(let i=0;i<7;i++){const day=dayKey(S.now+i*DAY);fc.push(active().filter(c=>c.state!=='new'&&dayKey(c.due)===day||(i===0&&c.state!=='new'&&c.due<=S.now)).length)}
+  bot(ru()?`📊 <b>Прогресс</b> · за всё время\n\n🏆 Выучено: ${t.learned}\n🌳 Знаю: ${t.known}\n🌿 Учу: ${t.learning}\n🌱 Новых впереди: ${t.new}\n\n🧠 Сумма памяти: ${mem} дн.\n<i>сколько дней в сумме держатся все начатые слова</i>\n🔥 Серия: ${S.streak} дн.\n🔁 Повторов всего: ${S.log.length}\n🎯 Удержание: ${ret}\n\n🗓 Прогноз на 7 дней: ${fc.join(' · ')}`:
+    `📊 <b>Progress</b> · all time\n\n🏆 Learned: ${t.learned}\n🌳 Known: ${t.known}\n🌿 Learning: ${t.learning}\n🌱 New ahead: ${t.new}\n\n🧠 Total memory: ${mem} d\n<i>sum of how long all started words are held</i>\n🔥 Streak: ${S.streak} d\n🔁 Total reviews: ${S.log.length}\n🎯 Retention: ${ret}\n\n🗓 Next 7 days: ${fc.join(' · ')}`);
 }
 const MODES=[[0.85,'Лёгкий','Light'],[0.9,'Оптимальный','Optimal'],[0.95,'Интенсив','Intense']];
 const DIRS={en_ru:'EN → RU',ru_en:'RU → EN',both:ru=>ru?'Оба':'Both'};
@@ -444,25 +473,43 @@ function genDeck(topic){
       (ru()?`\n\n<i>Осталось генераций сегодня: ${3-S.gens[day]} из 3</i>`:`\n\n<i>Generations left today: ${3-S.gens[day]} of 3</i>`),
       [[B(ru()?'✅ Добавить колоду':'✅ Add deck','gen:ok:'+pid,'primary'),B('✖️','gen:no:'+pid)]])});
 }
-function findDup(word){const w=word.trim().toLowerCase();for(const c of S.cards){const n=NOTES[c.note];if(S.decks.includes(c.deck)&&n.word.toLowerCase()===w)return c.deck}return null}
+function findDup(word){const w=word.trim().toLowerCase();for(const c of S.cards){const n=NOTES[c.note];if(S.decks.includes(c.deck)&&n.word.toLowerCase()===w)return n}return null}
+const URL_RE=/https?:\/\/[^\s<>"]+/gi;
+function cleanUrl(u){u=u.replace(/[.,;:!?)\]]+$/,'');return /^https?:\/\//i.test(u)&&u.length<=512?u:null}
+/* rules: URL on the same line as a word -> that word; URL on its own line -> all words without a URL; URL-only message -> pending */
+function parseWordsAndLinks(text){
+  const items=[];let shared=null;
+  for(const line of text.split('\n')){
+    const urls=(line.match(URL_RE)||[]).map(cleanUrl).filter(Boolean);
+    const word=line.replace(URL_RE,'').replace(/[\s—–-]+$/,'').replace(/^[\s—–-]+/,'').trim();
+    if(word)items.push({word,url:urls[0]||null});else if(urls[0]&&!shared)shared=urls[0];
+  }
+  for(const it of items)if(!it.url&&shared)it.url=shared;
+  return {items:items.slice(0,20),orphanUrl:items.length?null:shared};
+}
 function addWords(text){
-  const words=text.split('\n').map(s=>s.trim()).filter(Boolean).slice(0,20);
+  const {items,orphanUrl}=parseWordsAndLinks(text);
+  if(orphanUrl){S.pendingUrl={url:orphanUrl,t:S.now};
+    bot(ru()?`🔗 Ссылку <a href="${esc(orphanUrl)}" target="_blank" rel="noopener">${esc(host(orphanUrl))}</a> запомнил. Пришлите слова из неё — прикреплю ссылку к каждому.\n<i>Жду 10 минут.</i>`:`🔗 Saved the link <a href="${esc(orphanUrl)}" target="_blank" rel="noopener">${esc(host(orphanUrl))}</a>. Send the words from it and I’ll attach it to each.\n<i>Waiting for 10 minutes.</i>`);return}
+  if(S.pendingUrl&&S.now-S.pendingUrl.t<=10*MIN&&items.every(i=>!i.url)){for(const i of items)i.url=S.pendingUrl.url;S.pendingUrl=null}
   typing(700,()=>{
     const found=[],dups=[],unknown=[];
-    for(const w of words){const d=findDup(w);if(d){dups.push([w,d]);continue}
-      const k=w.toLowerCase();let e=DICT[k];if(!e){for(const rows of Object.values(RAW).concat(Object.values(GEN))){const r=rows.find(r=>r[0]===k);if(r){e=r.slice(1);break}}}
-      if(e)found.push([k,...e]);else unknown.push(w)}
+    for(const it of items){const d=findDup(it.word);
+      if(d){let linked=false;if(it.url&&!d.url){d.url=it.url;linked=true}dups.push([it.word,d.deck,linked]);continue}
+      const k=it.word.toLowerCase();let e=DICT[k];if(!e){for(const rows of Object.values(RAW).concat(Object.values(GEN))){const r=rows.find(r=>r[0]===k);if(r){e=r.slice(1);break}}}
+      if(e)found.push([k,...e.slice(0,5),it.url]);else unknown.push(it)}
+    const lk=u=>u?`\n🔗 ${esc(host(u))}`:'';
     let out='';
-    if(dups.length)out+=dups.map(([w,d])=>(ru()?`ℹ️ «${esc(w)}» уже учите в колоде «${esc(deckTitle(d))}».`:`ℹ️ You already learn “${esc(w)}” in “${esc(deckTitle(d))}”.`)).join('\n')+'\n\n';
+    if(dups.length)out+=dups.map(([w,d,l])=>(ru()?`ℹ️ «${esc(w)}» уже учите в колоде «${esc(deckTitle(d))}»${l?' — прикрепил ссылку 🔗, прогресс сохранён':''}.`:`ℹ️ You already learn “${esc(w)}” in “${esc(deckTitle(d))}”${l?' — link attached 🔗, progress kept':''}.`)).join('\n')+'\n\n';
     if(found.length===1&&!unknown.length){const r=found[0];const pid=S.pid++;S.prev[pid]={kind:'add',rows:[r]};
-      bot(out+`<b>${esc(r[0])}</b>\n${esc(r[1])} · <i>${esc(r[2])}</i>\n\n<b>${esc(r[3])}</b><blockquote><i>${esc(r[4])}</i>${esc(r[5])}</blockquote>`,
+      bot(out+`<b>${esc(r[0])}</b>\n${esc(r[1])} · <i>${esc(r[2])}</i>\n\n<b>${esc(r[3])}</b><blockquote><i>${esc(r[4])}</i>${esc(r[5])}</blockquote>`+lk(r[6]),
         [[B(ru()?'✅ Добавить':'✅ Add','add:ok:'+pid,'primary'),B(ru()?'✏️ Изменить':'✏️ Edit','add:edit:'+pid),B('✖️','add:no:'+pid)]]);return}
     if(found.length){const pid=S.pid++;S.prev[pid]={kind:'add',rows:found};
-      out+=(ru()?`Нашёл ${found.length}:\n`:`Found ${found.length}:\n`)+found.map(r=>`• <b>${esc(r[0])}</b> — ${esc(r[3])}`).join('\n');
-      if(unknown.length)out+=(ru()?`\n\nНе нашёл: ${unknown.map(esc).join(', ')}. В боте их переведёт AI.`:`\n\nNot found: ${unknown.map(esc).join(', ')}. In the bot, AI will translate them.`);
+      out+=(ru()?`Нашёл ${found.length}:\n`:`Found ${found.length}:\n`)+found.map(r=>`• <b>${esc(r[0])}</b> — ${esc(r[3])}${r[6]?' 🔗':''}`).join('\n');
+      if(unknown.length)out+=(ru()?`\n\nНе нашёл: ${unknown.map(u=>esc(u.word)).join(', ')}. В боте их переведёт AI.`:`\n\nNot found: ${unknown.map(u=>esc(u.word)).join(', ')}. In the bot, AI will translate them.`);
       bot(out,[[B(ru()?`✅ Добавить все (${found.length})`:`✅ Add all (${found.length})`,'add:ok:'+pid,'primary'),B('✖️','add:no:'+pid)]]);return}
-    if(unknown.length){const w=unknown[0];S.editing={word:w};
-      bot(out+(ru()?`🤖 В драфте нет AI, поэтому перевода для «${esc(w)}» нет. В боте его сделает бесплатная нейросеть.\n\nНапишите перевод сообщением, и я создам карточку.`:`🤖 This draft has no AI, so there is no translation for “${esc(w)}”. The bot will use a free AI model.\n\nType the translation and I’ll create the card.`));return}
+    if(unknown.length){const u=unknown[0];S.editing={word:u.word,url:u.url};
+      bot(out+(ru()?`🤖 В драфте нет AI, поэтому перевода для «${esc(u.word)}» нет. В боте его сделает бесплатная нейросеть.\n\nНапишите перевод сообщением, и я создам карточку.`:`🤖 This draft has no AI, so there is no translation for “${esc(u.word)}”. The bot will use a free AI model.\n\nType the translation and I’ll create the card.`)+lk(u.url));return}
     if(out)bot(out.trim());
   });
 }
@@ -482,7 +529,7 @@ function onText(raw){
   if(S.ob){bot(ru()?'Давайте сначала закончим настройку — выберите вариант выше ↑':'Let’s finish setup first — pick an option above ↑');return}
   if(S.editing&&!text.startsWith('/')){const e=S.editing;S.editing=null;
     if(e.pid){const p=S.prev[e.pid];if(p)p.rows[0][3]=text;const r=p.rows[0];bot(`<b>${esc(r[0])}</b>\n\n<b>${esc(r[3])}</b>`,[[B(ru()?'✅ Добавить':'✅ Add','add:ok:'+e.pid,'primary'),B('✖️','add:no:'+e.pid)]]);return}
-    addToMine([[e.word.toLowerCase(),'','—',text,'','']]);bot(ru()?`✅ «${esc(e.word)}» добавлено в «Мои слова».`:`✅ “${esc(e.word)}” added to “My words”.`,[[B(ru()?'▶ Учить':'▶ Learn','learn','primary')]]);renderState();return}
+    addToMine([[e.word.toLowerCase(),'','—',text,'','',e.url||null]]);bot(ru()?`✅ «${esc(e.word)}» добавлено в «Мои слова».`:`✅ “${esc(e.word)}” added to “My words”.`,[[B(ru()?'▶ Учить':'▶ Learn','learn','primary')]]);renderState();return}
   switch(cmd){
     case '/start':bot(ru()?'Вы уже настроены 🙂 /learn — повторять, /help — все команды.':'You’re all set 🙂 /learn to review, /help for commands.');return;
     case '/learn':startSession();return;
@@ -501,13 +548,9 @@ function onCb(cb,msgId){
   switch(p[0]){
     case 'ob':return onOb(p,msgId);
     case 'learn':return startSession();
-    case 'a':{const c=S.cards.find(x=>x.id===+p[1]);if(!S.sess||S.sess.card!==+p[1]||S.sess.side!=='front'){toast(ru()?'Эта кнопка уже неактуальна':'This button is outdated');return}
-      S.sess.side='back';edit(S.sess.msg,cardBody(c,true),backKb(c));return}
     case 'g':return grade(+p[1],+p[2],+p[3]);
     case 'u':return undo();
     case 'v':return voice(+p[1]);
-    case 'now':{if(!S.sess||S.sess.side!=='wait')return;const l=active().filter(c=>c.state==='learning'||c.state==='relearning').sort((a,b)=>a.due-b.due)[0];
-      if(l){S.sess.card=l.id;S.sess.side='front';S.sess.wait=null;edit(S.sess.msg,cardBody(l,false),frontKb(l))}return}
     case 'decks':return decksMsg();
     case 'help':return bot(ru()?'Напишите слово или фразу в чат, например <code>resilient</code>. Можно несколько строк сразу.':'Type a word or phrase, e.g. <code>resilient</code>. Several lines at once work too.');
     case 'sub':{subscribe(p[1]);edit(msgId,`✅ ${ru()?'Колода':'Deck'} <b>${esc(deckTitle(p[1]))}</b> ${ru()?'добавлена.':'added.'}`,[[B(ru()?'▶ Учить':'▶ Learn','learn','primary')]]);renderState();return}
@@ -557,16 +600,12 @@ function checkReminders(){
     if(n>0){bot(ru()?`⏰ <b>Пора повторить</b>\n${n} карточек · ~${Math.max(1,Math.ceil(n/3))} мин`:`⏰ <b>Time to review</b>\n${n} cards · ~${Math.max(1,Math.ceil(n/3))} min`,[[B(ru()?'▶ Начать':'▶ Start','learn','primary')]]);return}}
   if(lm>=20*60&&!quiet&&!studied&&S.streak>=2&&S.eveDay!==day){S.eveDay=day;bot(ru()?`🔥 Серия <b>${S.streak} дн.</b> под угрозой. Хватит пары минут.`:`🔥 Your <b>${S.streak}-day</b> streak is at risk. Two minutes is enough.`,[[B(ru()?'▶ Спасти серию':'▶ Save the streak','learn','primary')]]);return}
   const waiting=active().filter(c=>(c.state==='learning'||c.state==='relearning')&&c.due<=S.now).length;
-  const inWait=S.sess&&S.sess.side==='wait';
-  if(waiting&&!quiet&&!inWait&&S.now-S.lastReview>3*MIN&&S.lastPing<S.lastReview&&!(S.sess&&S.sess.side==='front'||S.sess&&S.sess.side==='back')){S.lastPing=S.now;
+  if(waiting&&!quiet&&S.now-S.lastReview>3*MIN&&S.lastPing<S.lastReview){S.lastPing=S.now;
     bot(ru()?`🧠 ${waiting} ${waiting===1?'карточка ждёт':'карточки ждут'} закрепления — это 1 минута.`:`🧠 ${waiting} card${waiting>1?'s':''} waiting on a learning step — 1 minute.`,[[B(ru()?'▶ Продолжить':'▶ Continue','learn','primary')]])}
 }
 function advance(ms){
   const before=Math.floor(S.now/MIN);S.now+=ms;
-  if(S.sess&&S.sess.side==='wait'){if(S.now>=S.sess.wait)showNext();else renderWait()}
-  if(Math.floor(S.now/MIN)!==before){
-    if(S.sess&&S.sess.side==='done'&&ms>=MIN)S.sess.side='idle';
-    checkReminders();renderState()}
+  if(Math.floor(S.now/MIN)!==before){checkReminders();renderState()}
   renderClock();
 }
 function jumpTomorrow(){
@@ -574,7 +613,7 @@ function jumpTomorrow(){
   // run reminders at intermediate points so evening push can fire, then land at 09:00
   const eve=Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),20,0)-S.off*MIN;
   if(S.now<eve){S.now=eve-1000;advance(1000)}
-  S.now=target-1000;if(S.sess&&S.sess.side==='wait'){S.sess.side='idle'}advance(1000);
+  S.now=target-1000;advance(1000);
 }
 
 /* ---------- render ---------- */
@@ -594,9 +633,10 @@ function renderBottom(){
   if(!S.started){b.innerHTML=`<div class="startbar"><button type="button" id="startBtn">${tt('start')}</button></div>`;
     document.getElementById('startBtn').onclick=()=>{S.started=true;renderBottom();send('me','/start');obLang()};return}
   const val=document.getElementById('inp')?.value||'';
-  b.innerHTML=`<div class="bar"><button class="menu-btn" type="button" id="menuBtn" aria-haspopup="true">☰ ${tt('menu')}</button><input id="inp" autocomplete="off" placeholder="${tt('ph')}" aria-label="${tt('ph')}"><button class="send" type="button" id="sendBtn" aria-label="Send"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg></button><div class="cmds" id="cmds" hidden></div></div>`;
+  b.innerHTML=`<div class="bar"><button class="menu-btn" type="button" id="menuBtn" aria-haspopup="true">☰ ${tt('menu')}</button><textarea id="inp" rows="1" placeholder="${tt('ph')}" aria-label="${tt('ph')}"></textarea><button class="send" type="button" id="sendBtn" aria-label="Send"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg></button><div class="cmds" id="cmds" hidden></div></div>`;
   const inp=document.getElementById('inp');inp.value=val;
-  const go=()=>{const v=inp.value;inp.value='';onText(v)};
+  const fit=()=>{inp.style.height='auto';inp.style.height=inp.scrollHeight+'px'};inp.oninput=fit;
+  const go=()=>{const v=inp.value;inp.value='';fit();onText(v)};
   document.getElementById('sendBtn').onclick=go;
   inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();go()}};
   const cmds=document.getElementById('cmds');
@@ -613,12 +653,13 @@ function renderClock(){const d=loc(S.now);
 }
 function renderState(){
   const c=counts();const a=S.cards.filter(x=>S.decks.includes(x.deck));
-  const rows=[['Колоды',S.decks.length],['Карточек всего',a.length],['Новых на сегодня',c.n],['На закреплении',c.l],['К повтору сегодня',c.r],['Повторов',S.log.length],['Серия, дней',S.streak],['Режим удержания',Math.round(S.ret*100)+'%']];
+  const tt2=totals();const rows=[['Выучено · знаю · учу',`${tt2.learned} · ${tt2.known} · ${tt2.learning}`],['Колоды',S.decks.length],['Карточек всего',a.length],['Новых на сегодня',c.n],['На закреплении',c.l],['К повтору сегодня',c.r],['Повторов',S.log.length],['Серия, дней',S.streak],['Режим удержания',Math.round(S.ret*100)+'%']];
   document.getElementById('state').innerHTML=rows.map(([k,v])=>`<span>${k}</span><span>${v}</span>`).join('');
 }
 
 chat.addEventListener('click',e=>{
   const b=e.target.closest('[data-cb]');if(b){document.getElementById('cmds')?.setAttribute('hidden','');onCb(b.dataset.cb,+b.dataset.m);return}
+  const sp=e.target.closest('.spoiler');if(sp){sp.classList.add('open');return}
   const v=e.target.closest('[data-say]');if(v){try{const u=new SpeechSynthesisUtterance(v.dataset.say);u.lang='en-US';speechSynthesis.cancel();speechSynthesis.speak(u)}catch(err){}}
 });
 document.getElementById('j1m').onclick=()=>advance(MIN);
