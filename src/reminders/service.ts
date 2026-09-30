@@ -76,7 +76,7 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
   };
   const budgetLeft = () => !blocked && sent < MAX_SENDS;
 
-  for (const r of daily!.results as (Target & { due_n: number; new_n: number })[]) {
+  for (const r of daily!.results as unknown as (Target & { due_n: number; new_n: number })[]) {
     if (!budgetLeft()) break;
     const n = r.due_n + r.new_n;
     if (n > 0) {
@@ -86,13 +86,13 @@ export async function tick(d: TickDeps): Promise<{ sent: number }> {
     }
     marks.push(repo.updateUserStmt(r.id, { lastDailyPushDay: r.local_day }));
   }
-  for (const r of evening!.results as (Target & { streak: number })[]) {
+  for (const r of evening!.results as unknown as (Target & { streak: number })[]) {
     if (!budgetLeft()) break;
     const t = dict(r.lang);
     const res = await send(r.id, { chat_id: r.chat_id, text: t.pushEvening(r.streak), reply_markup: button(t.saveStreakBtn), parse_mode: "HTML" });
     if (res !== "error") marks.push(repo.updateUserStmt(r.id, { lastEveningPushDay: r.local_day }));
   }
-  for (const r of step!.results as (Target & { waiting: number })[]) {
+  for (const r of step!.results as unknown as (Target & { waiting: number })[]) {
     if (!budgetLeft()) break;
     const t = dict(r.lang);
     const res = await send(r.id, { chat_id: r.chat_id, text: t.pushStep(r.waiting), reply_markup: button(t.continueBtn), parse_mode: "HTML" });
