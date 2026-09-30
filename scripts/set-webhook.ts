@@ -1,4 +1,5 @@
 /** Registers the webhook and bot commands. Env: BOT_TOKEN, WEBHOOK_SECRET, WORKER_URL. */
+export {};
 const { BOT_TOKEN, WEBHOOK_SECRET, WORKER_URL } = process.env;
 if (!BOT_TOKEN || !WEBHOOK_SECRET || !WORKER_URL) throw new Error("BOT_TOKEN, WEBHOOK_SECRET and WORKER_URL are required");
 
