@@ -8,18 +8,31 @@ const MAX_URL = 512;
 const RAW_URL = /https?:\/\/[^\s<>"]+/gi;
 
 export function cleanUrl(raw: string): string | null {
-  const u = raw.trim().replace(/[.,;:!?)\]}»"']+$/, "");
+  let u = raw.trim();
+  const count = (c: string) => u.split(c).length - 1;
+  for (;;) {
+    const last = u.slice(-1);
+    if (/[.,;:!?\]}»"']/.test(last)) u = u.slice(0, -1);
+    else if (last === ")" && count(")") > count("(")) u = u.slice(0, -1);
+    else break;
+  }
   if (!/^https?:\/\/[^\s/]+/i.test(u) || u.length > MAX_URL) return null;
   return u;
 }
 
-/** Collapse spaces, drop dashes/colons and brackets left dangling by a removed link. */
+const EDGE = /^[\s—–:;,.!?…"'«»\-]+|[\s—–:;,.!?…"'«»\-]+$/gu;
+/** Collapse spaces, drop punctuation and brackets left dangling by a removed link. */
 function tidy(w: string): string {
-  let s = w.replace(/\s+/g, " ").replace(/^[\s—–:-]+|[\s—–:-]+$/gu, "");
+  let s = w.replace(/\s+/g, " ").replace(/\(\s*\)|\[\s*\]/g, " ").replace(/\s+/g, " ").replace(EDGE, "");
   const count = (c: string) => s.split(c).length - 1;
-  while (s.endsWith("(") || (s.endsWith(")") && count(")") > count("("))) s = s.slice(0, -1).trimEnd();
-  while (s.startsWith(")") || (s.startsWith("(") && count("(") > count(")"))) s = s.slice(1).trimStart();
-  return s.replace(/^[\s—–:-]+|[\s—–:-]+$/gu, "");
+  for (let guard = 0; guard < 10; guard++) {
+    const before = s;
+    if (s.endsWith("(") || (s.endsWith(")") && count(")") > count("("))) s = s.slice(0, -1);
+    if (s.startsWith(")") || (s.startsWith("(") && count("(") > count(")"))) s = s.slice(1);
+    s = s.replace(EDGE, "");
+    if (s === before) break;
+  }
+  return s;
 }
 
 interface Span { start: number; end: number; url: string | null; keepText: boolean }

@@ -45,6 +45,21 @@ describe("parseWordsAndLinks", () => {
     const t = "cozy https://a.com https://b.com";
     expect(parseWordsAndLinks(t, urlEntities(t)).items).toEqual([{ word: "cozy", url: "https://a.com" }]);
   });
+  it("telegram-shaped entities: punctuation around links is not part of the word", () => {
+    const tg = (text: string, url: string): Entity[] => [{ type: "url", offset: text.indexOf(url), length: url.length }];
+    const cases: [string, string, string][] = [
+      ["serendipity (https://x.com/a).", "https://x.com/a", "serendipity"],
+      ["serendipity https://x.com/a).", "https://x.com/a", "serendipity"],
+      ["serendipity — https://x.com/a.", "https://x.com/a", "serendipity"],
+      ["word, https://x.com/a", "https://x.com/a", "word"],
+    ];
+    for (const [text, url, word] of cases) expect(parseWordsAndLinks(text, tg(text, url)).items).toEqual([{ word, url }]);
+  });
+  it("balanced parentheses inside a url are kept", () => {
+    const u = "https://en.wikipedia.org/wiki/Set_(mathematics)";
+    expect(parseWordsAndLinks(`set ${u}`, []).items).toEqual([{ word: "set", url: u }]);
+    expect(parseWordsAndLinks(`set (${u})`, []).items).toEqual([{ word: "set", url: u }]);
+  });
   it("keeps at most 20 words and drops duplicates", () => {
     const t = Array.from({ length: 25 }, (_, i) => `w${i}`).concat(["w1"]).join("\n");
     const r = parseWordsAndLinks(t, []);
