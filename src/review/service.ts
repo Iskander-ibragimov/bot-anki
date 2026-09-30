@@ -23,7 +23,8 @@ export type Screen =
   | { kind: "noundo" }
   | { kind: "nothing" };
 
-const ROWS_PER_REVIEW = 5;
+/** D1 rows written per grade, index updates included (card, log, user, usage). */
+const ROWS_PER_REVIEW = 8;
 
 export const directionsOf = (u: Pick<User, "direction">): Direction[] =>
   u.direction === "both" ? ["en_ru", "ru_en"] : [u.direction];
@@ -88,20 +89,21 @@ export class ReviewService {
     const streak = user.lastStudyDay === today ? user.streak : user.lastStudyDay === yesterday ? user.streak + 1 : 1;
     const learnedNow = stage(before) !== "learned" && stage(after) === "learned";
     const stmts = [
-      this.repo.updateCardStmt(card.id, after),
-      this.repo.insertLogStmt({
+      this.repo.gradeCardStmt(card.id, reps, after),
+      this.repo.guardedLogStmt({
         cardId: card.id, userId: user.id, rating, stateBefore: before, intervalBeforeDays: before.scheduledDays,
         intervalAfterMs: after.due - this.now, reviewedAt: this.now, wasNew: before.state === "new", learnedNow,
         streakBefore: user.streak, lastStudyDayBefore: user.lastStudyDay,
       }),
-      this.repo.updateUserStmt(user.id, { streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1 }),
-      this.repo.bumpUsageStmt(new Date(this.now).toISOString().slice(0, 10), 1, ROWS_PER_REVIEW),
+      this.repo.guardedUserStmt(user.id, { streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1 }),
+      this.repo.guardedUsageStmt(new Date(this.now).toISOString().slice(0, 10), 1, ROWS_PER_REVIEW),
     ];
     if (user.direction === "both") {
       const sibling: Direction = card.direction === "en_ru" ? "ru_en" : "en_ru";
-      stmts.push(this.repo.siblingBuryStmt(user.id, card.noteId, sibling, today, this.now));
+      stmts.push(this.repo.guardedSiblingStmt(user.id, card.noteId, sibling, today, this.now));
     }
-    await this.repo.batch(stmts);
+    const res = await this.repo.batch(stmts);
+    if (!res[0]?.meta.changes) return { kind: "stale" };
     const updated: User = { ...user, streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1 };
     return this.nextScreen(updated, feedbackOf(card.word, before, after, this.now));
   }

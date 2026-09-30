@@ -120,4 +120,19 @@ describe("review service", () => {
     await new ReviewService(new Repo(db), T).grade(user, s.view.cardId, 0, 3);
     expect(db.calls).toBeLessThanOrEqual(4);
   });
+
+  it("two parallel taps on the same button grade once", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 3, patch: { streak: 2, lastStudyDay: "2026-09-29" } });
+    const s = asCard(await new ReviewService(repo, T).nextScreen(user));
+    const results = await Promise.all([
+      new ReviewService(repo, T).grade(user, s.view.cardId, 0, 3),
+      new ReviewService(repo, T).grade(user, s.view.cardId, 0, 3),
+    ]);
+    expect(results.map((r) => r.kind).sort()).toEqual(["card", "stale"]);
+    const logs = await env.DB.prepare("SELECT COUNT(*) AS n FROM review_log").first<{ n: number }>();
+    expect(logs!.n).toBe(1);
+    const u = (await repo.getUser(user.id))!;
+    expect(u.streak).toBe(3);
+    expect(u.mixCounter).toBe(1);
+  });
 });
