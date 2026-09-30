@@ -34,4 +34,10 @@ export const en: Dict = {
   edit: "✏️ Edit",
   cancel: "✖️",
   foundN: (n) => `Found ${n}:`,
+  pushDaily: (n, mins) => `⏰ <b>Time to review</b>\n${n} cards · ~${mins} min`,
+  pushEvening: (streak) => `🔥 Your <b>${streak}-day</b> streak is at risk. Two minutes is enough.`,
+  pushStep: (n) => `🧠 Cards on a learning step: ${n} — takes 1 minute.`,
+  startBtn: "▶ Start",
+  saveStreakBtn: "▶ Save the streak",
+  continueBtn: "▶ Continue",
 };

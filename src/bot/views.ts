@@ -1,6 +1,6 @@
 import type { InlineKeyboardButton } from "grammy/types";
 import { type Lang, type Mem, type Rating, memoryDays, stage } from "../srs/fsrs";
-import { dict } from "./i18n";
+import { dict } from "../i18n";
 
 export type Button = InlineKeyboardButton.CallbackButton;
 export type Keyboard = Button[][];

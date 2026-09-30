@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderAddPreview, renderCard, renderDone, type CardView } from "../../src/bot/views";
-import { en } from "../../src/bot/i18n/en";
-import { ru } from "../../src/bot/i18n/ru";
+import { en } from "../../src/i18n/en";
+import { ru } from "../../src/i18n/ru";
 import { newMem } from "../../src/srs/fsrs";
 
 const T = Date.UTC(2026, 8, 30, 6);

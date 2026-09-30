@@ -1,4 +1,4 @@
-import type { Lang } from "../../srs/fsrs";
+import type { Lang } from "../srs/fsrs";
 import { en } from "./en";
 import { ru, type Dict } from "./ru";
 

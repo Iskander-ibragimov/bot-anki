@@ -33,6 +33,12 @@ export const ru = {
   edit: "✏️ Изменить",
   cancel: "✖️",
   foundN: (n: number) => `Нашёл ${n}:`,
+  pushDaily: (n: number, mins: number) => `⏰ <b>Пора повторить</b>\n${n} карточек · ~${mins} мин`,
+  pushEvening: (streak: number) => `🔥 Серия <b>${streak} дн.</b> под угрозой. Хватит пары минут.`,
+  pushStep: (n: number) => `🧠 Карточек на закреплении: ${n} — это 1 минута.`,
+  startBtn: "▶ Начать",
+  saveStreakBtn: "▶ Спасти серию",
+  continueBtn: "▶ Продолжить",
 } as const;
 
 type Widen<T> = { [K in keyof T]: T[K] extends (...a: infer A) => string ? (...a: A) => string : string };
