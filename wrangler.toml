@@ -1,5 +1,6 @@
 name = "povtor-bot"
 main = "src/index.ts"
+workers_dev = true
 compatibility_date = "2026-08-15"
 compatibility_flags = ["nodejs_compat"]
 

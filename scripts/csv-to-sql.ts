@@ -1,4 +1,4 @@
-/** Generates migrations/0002_seed_catalog.sql from data/decks/*.csv. Usage: npx tsx scripts/csv-to-sql.ts */
+/** Generates seed/catalog.sql (applied on every deploy; idempotent) from data/decks/*.csv. Usage: npx tsx scripts/csv-to-sql.ts */
 import { writeFileSync } from "node:fs";
 import { csvToSql } from "./lib/csv";
 import { readDeck, readIndex } from "./lib/decks";
@@ -9,4 +9,4 @@ for (const d of readIndex()) {
   sql += csvToSql({ slug: d.slug, titleRu: d.titleRu, titleEn: d.titleEn, level: d.level }, rows);
   console.log(`${d.slug}: ${rows.length} words`);
 }
-writeFileSync("migrations/0002_seed_catalog.sql", sql);
+writeFileSync("seed/catalog.sql", sql);

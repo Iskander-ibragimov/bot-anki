@@ -8,8 +8,8 @@ export interface Env {
   LLM_PROVIDERS: string;
 }
 
-const Provider = z.object({ baseUrl: z.string().url(), apiKey: z.string(), model: z.string().min(1) });
-export type LlmProvider = z.infer<typeof Provider>;
+import { ProviderSchema as Provider, type LlmProvider } from "./content/llm";
+export type { LlmProvider };
 
 export interface Config {
   botToken: string;

@@ -1,5 +1,7 @@
 import { z } from "zod";
-import type { LlmProvider } from "../env";
+
+export const ProviderSchema = z.object({ baseUrl: z.string().url(), apiKey: z.string(), model: z.string().min(1) });
+export type LlmProvider = z.infer<typeof ProviderSchema>;
 
 const CYR = /[А-Яа-яЁё]/;
 export const WordCardSchema = z.object({

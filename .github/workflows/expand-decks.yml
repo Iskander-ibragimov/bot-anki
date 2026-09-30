@@ -1,0 +1,27 @@
+name: Expand a catalog deck with AI
+on:
+  workflow_dispatch:
+    inputs:
+      deck: { description: "a1, a2, b1, b2, travel, it_work, phrases", required: true, default: a2 }
+      add: { description: "How many words to add", required: true, default: "100" }
+permissions:
+  contents: write
+jobs:
+  expand:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: corepack enable pnpm && pnpm install --frozen-lockfile
+      - run: npx tsx scripts/build-decks.ts --deck "${{ inputs.deck }}" --add "${{ inputs.add }}"
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      - run: npx tsx scripts/csv-to-sql.ts
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/decks seed/catalog.sql
+          git diff --cached --quiet || git commit -m "chore: expand ${{ inputs.deck }} deck"
+          git push

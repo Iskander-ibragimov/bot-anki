@@ -21,6 +21,7 @@ export function fakeTelegram() {
       if (method === "sendVoice") res.voice = { file_id: `voice-${id}`, file_unique_id: `u${id}`, duration: 1 };
       return res;
     }
+    if (method === "getFile") return { file_id: payload.file_id, file_unique_id: "u", file_path: "documents/file.csv" };
     return true;
   }
   return {
