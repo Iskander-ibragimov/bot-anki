@@ -1,0 +1,9 @@
+[
+  { "slug": "a1", "file": "a1.csv", "titleRu": "A1 · Начальный", "titleEn": "A1 · Beginner", "level": "A1", "size": 500 },
+  { "slug": "a2", "file": "a2.csv", "titleRu": "A2 · Базовый", "titleEn": "A2 · Elementary", "level": "A2", "size": 500 },
+  { "slug": "b1", "file": "b1.csv", "titleRu": "B1 · Средний", "titleEn": "B1 · Intermediate", "level": "B1", "size": 600 },
+  { "slug": "b2", "file": "b2.csv", "titleRu": "B2 · Выше среднего", "titleEn": "B2 · Upper-intermediate", "level": "B2", "size": 600 },
+  { "slug": "travel", "file": "travel.csv", "titleRu": "Путешествия", "titleEn": "Travel", "level": null, "size": 250 },
+  { "slug": "it_work", "file": "it_work.csv", "titleRu": "IT и работа", "titleEn": "IT & work", "level": null, "size": 300 },
+  { "slug": "phrases", "file": "phrases.csv", "titleRu": "Разговорные фразы", "titleEn": "Everyday phrases", "level": null, "size": 250 }
+]

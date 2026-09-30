@@ -78,6 +78,10 @@ describe("content service", () => {
     const hit = await repo.findNoteForUser(user.id, "Serendipity");
     expect(hit).toMatchObject({ sourceUrl: "https://example.com/a", deckTitleRu: "Мои слова" });
     await expect(svc.confirmAdd(user, r.previewId)).rejects.toThrow();
+    const jobs = await env.DB.prepare("SELECT kind, payload, dedup_key FROM jobs").all<{ kind: string; payload: string; dedup_key: string }>();
+    expect(jobs.results).toHaveLength(1);
+    expect(jobs.results[0]).toMatchObject({ kind: "voice", dedup_key: expect.stringMatching(/^voice:\d+$/) });
+    expect(JSON.parse(jobs.results[0]!.payload).audioUrl).toContain(".mp3");
   });
 
   it("duplicate in a subscribed deck is not added again but gets the link", async () => {

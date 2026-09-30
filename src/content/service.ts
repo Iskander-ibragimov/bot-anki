@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { type NoteInput, type Repo, type User, wordKey } from "../db/repo";
 import { consume } from "../entitlements/service";
+import { enqueue } from "../jobs/queue";
 import type { DictionaryClient } from "./dictionary";
 import { type Entity, parseWordsAndLinks } from "./links";
 import { DECK_SYSTEM, type LlmClient, LlmUnavailable, WORDS_SYSTEM, WordCardSchema } from "./llm";
@@ -133,6 +134,7 @@ export class ContentService {
     const ids = await this.repo.insertNotes(deckId, items.map(toNote));
     await this.repo.deletePreview(user.id, previewId);
     const audio = items.flatMap((d, i) => (d.audioUrl ? [{ noteId: ids[i]!, audioUrl: d.audioUrl }] : []));
+    for (const a of audio) await enqueue(this.repo.db, "voice", a, this.now, `voice:${a.noteId}`);
     return { words: items.map((i) => i.word), audio };
   }
 

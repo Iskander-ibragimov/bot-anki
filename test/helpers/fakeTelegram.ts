@@ -5,7 +5,7 @@ export function fakeTelegram() {
   const calls: TgCall[] = [];
   let nextMessageId = 100;
   const failures = new Map<string, { status: number; description: string; retry_after?: number }>();
-  async function call(method: string, payload: Record<string, unknown>): Promise<unknown> {
+  async function callImpl(method: string, payload: Record<string, unknown>): Promise<unknown> {
     calls.push({ method, payload });
     const f = failures.get(method);
     if (f) {
@@ -25,7 +25,7 @@ export function fakeTelegram() {
   }
   return {
     calls,
-    call,
+    call: callImpl as <T = unknown>(method: string, payload: Record<string, unknown>) => Promise<T>,
     failNext(method: string, status: number, description: string, retry_after?: number) {
       failures.set(method, { status, description, retry_after });
     },
