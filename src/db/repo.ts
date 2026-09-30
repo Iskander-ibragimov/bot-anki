@@ -71,6 +71,8 @@ function rowToUser(r: Record<string, unknown>): User {
 }
 
 const NOTE_COLS = "n.word, n.ipa, n.pos, n.translation, n.example_en, n.example_ru, n.audio_file_id, n.audio_url, n.source_url";
+/** A note/direction is "new" unless its card was started, or any card of the note is buried today. Binds: userId, today. */
+const NEW_FILTER = `NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ? AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?))`;
 const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${NOTE_COLS}`;
 
 function noteFields(r: Record<string, unknown>): NoteFields {
@@ -208,9 +210,35 @@ export class Repo {
       `UPDATE cards SET state = ?, step = ?, stability = ?, difficulty = ?, due = ?, last_review = ?, scheduled_days = ?, reps = ?, lapses = ? WHERE id = ?`,
     ).bind(m.state, m.step, m.stability, m.difficulty, m.due, m.lastReview, m.scheduledDays, m.reps, m.lapses, cardId);
   }
-  buryStmt(userId: number, noteId: number, exceptCardId: number, day: string): D1PreparedStatement {
-    return this.db.prepare("UPDATE cards SET buried_day = ? WHERE user_id = ? AND note_id = ? AND id != ? AND state NOT IN ('learning','relearning')")
-      .bind(day, userId, noteId, exceptCardId);
+  /** Returns the id of the (possibly pre-created) new card for this note and direction. */
+  async ensureNewCard(userId: number, noteId: number, direction: Direction, m: Mem): Promise<number> {
+    const r = await this.db.prepare(
+      `INSERT INTO cards (user_id, note_id, direction, state, due, scheduled_days, reps, lapses) VALUES (?, ?, ?, 'new', ?, 0, 0, 0)
+       ON CONFLICT (user_id, note_id, direction) DO UPDATE SET due = cards.due RETURNING id`,
+    ).bind(userId, noteId, direction, m.due).first<{ id: number }>();
+    return r!.id;
+  }
+  /** Hide the other-direction card of a note until tomorrow, creating it as new if needed. */
+  siblingBuryStmt(userId: number, noteId: number, siblingDir: Direction, day: string, now: number): D1PreparedStatement {
+    return this.db.prepare(
+      `INSERT INTO cards (user_id, note_id, direction, state, due, scheduled_days, reps, lapses, buried_day) VALUES (?, ?, ?, 'new', ?, 0, 0, 0, ?)
+       ON CONFLICT (user_id, note_id, direction) DO UPDATE SET buried_day = excluded.buried_day WHERE cards.state NOT IN ('learning','relearning')`,
+    ).bind(userId, noteId, siblingDir, now, day);
+  }
+  /** Today's activity and cumulative totals by stage for one display direction. */
+  async summary(userId: number, dayStartMs: number, direction: Direction): Promise<{ reviewsToday: number; learnedToday: number; learned: number; known: number; learning: number; new: number }> {
+    const r = await this.db.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?2) AS reviews_today,
+         (SELECT COALESCE(SUM(learned_now), 0) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?2) AS learned_today,
+         COALESCE(SUM(CASE WHEN c.id IS NULL OR c.state = 'new' THEN 1 ELSE 0 END), 0) AS new_n,
+         COALESCE(SUM(CASE WHEN c.state IN ('learning','relearning') OR (c.state = 'review' AND c.scheduled_days < 7) THEN 1 ELSE 0 END), 0) AS learning_n,
+         COALESCE(SUM(CASE WHEN c.state = 'review' AND c.scheduled_days BETWEEN 7 AND 20 THEN 1 ELSE 0 END), 0) AS known_n,
+         COALESCE(SUM(CASE WHEN c.state = 'review' AND c.scheduled_days >= 21 THEN 1 ELSE 0 END), 0) AS learned_n
+       FROM notes n LEFT JOIN cards c ON c.note_id = n.id AND c.user_id = ?1 AND c.direction = ?3
+       WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)`,
+    ).bind(userId, dayStartMs, direction).first<Record<string, number>>();
+    return { reviewsToday: r!.reviews_today!, learnedToday: r!.learned_today!, learned: r!.learned_n!, known: r!.known_n!, learning: r!.learning_n!, new: r!.new_n! };
   }
   async getCard(userId: number, cardId: number): Promise<CardRow | null> {
     const r = await this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.id = ? AND c.user_id = ?`)
@@ -237,13 +265,11 @@ export class Repo {
         WHERE c.user_id = ? AND c.state = 'review' AND c.due < ? AND ${inDirs} AND ${notBuried} AND ${inDecks} ORDER BY c.due LIMIT ?`)
         .bind(userId, w.dayEndMs, dirs, w.today, userId, lim),
       this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS} FROM notes n JOIN json_each(?) d
-        WHERE ${inDecks} AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ? AND c.note_id = n.id AND c.direction = d.value)
-        AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ? AND c.note_id = n.id AND c.buried_day = ?)
-        ORDER BY n.deck_id, n.id, d.value LIMIT ?`).bind(dirs, userId, userId, userId, w.today, lim),
+        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY n.deck_id, n.id, d.value LIMIT ?`).bind(dirs, userId, userId, w.today, lim),
       this.db.prepare(`SELECT
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state IN ('learning','relearning') AND c.direction IN (SELECT value FROM json_each(?2)) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS learning,
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,
-          (SELECT COUNT(*) FROM notes n JOIN json_each(?2) d WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1) AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id AND c.direction = d.value)) AS new_available,
+          (SELECT COUNT(*) FROM notes n JOIN json_each(?2) d WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1) AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?4))) AS new_available,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND undone = 0 AND reviewed_at >= ?5) AS new_done_today`)
         .bind(userId, dirs, w.dayEndMs, w.today, w.dayStartMs),
     ]);

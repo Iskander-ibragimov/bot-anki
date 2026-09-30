@@ -6,18 +6,8 @@ export type Button = InlineKeyboardButton.CallbackButton;
 export type Keyboard = Button[][];
 export interface Rendered { text: string; keyboard: Keyboard }
 
-export interface CardView {
-  cardId: number; noteId: number; reps: number; direction: "en_ru" | "ru_en";
-  word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string;
-  hasAudio: boolean; sourceUrl: string | null; mem: Mem;
-}
-export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number; keptDays?: number }
-export interface Counts { n: number; l: number; r: number }
-export interface DaySummary {
-  reviewsToday: number; learnedToday: number;
-  totals: { learned: number; known: number; learning: number; new: number };
-  nextLearningInMs: number | null; streak: number;
-}
+import type { CardView, Counts, DaySummary, Feedback } from "../review/service";
+export type { CardView, Counts, DaySummary, Feedback };
 export interface PreviewItem { word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string; sourceUrl: string | null }
 
 export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
