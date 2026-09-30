@@ -125,8 +125,9 @@ describe("content service", () => {
     const r = await svc.prepareAdd(user, "cozy", []);
     if (r.kind !== "preview") throw new Error(r.kind);
     await svc.startEdit(user, r.previewId);
-    const items = await svc.editPreviewTranslation((await repo.getUser(user.id))!, "тёплый, уютный");
-    expect(items[0]!.translation).toBe("тёплый, уютный");
+    const edited = await svc.editPreviewTranslation((await repo.getUser(user.id))!, "тёплый, уютный");
+    expect(edited.previewId).toBe(r.previewId);
+    expect(edited.items[0]!.translation).toBe("тёплый, уютный");
   });
 
   it("gen limit is 3 per local day and resets at 04:00 local", async () => {

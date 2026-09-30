@@ -299,6 +299,25 @@ export class Repo {
     void now;
   }
 
+  /** Cumulative numbers for /stats in one D1 call. */
+  async statsExtra(userId: number, now: number, dayStartMs: number, direction: Direction): Promise<{ memory: number; total: number; r30: number; rev30: number; ok30: number; forecast: { d: number; n: number }[] }> {
+    const since = now - 30 * 86_400_000;
+    const [a, f] = await this.db.batch<Record<string, number>>([
+      this.db.prepare(`SELECT
+          (SELECT COALESCE(SUM(CASE WHEN state = 'review' THEN scheduled_days WHEN state = 'relearning' THEN MAX(1, CAST(ROUND(stability) AS INTEGER)) ELSE 0 END), 0)
+             FROM cards WHERE user_id = ?1 AND direction = ?2) AS memory,
+          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0) AS total,
+          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3) AS r30,
+          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review') AS rev30,
+          (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND undone = 0 AND reviewed_at >= ?3 AND json_extract(state_before, '$.state') = 'review' AND rating > 1) AS ok30`)
+        .bind(userId, direction, since),
+      this.db.prepare(`SELECT MAX(0, CAST((due - ?2) / 86400000 AS INTEGER)) AS d, COUNT(*) AS n FROM cards
+          WHERE user_id = ?1 AND state != 'new' AND due < ?2 + 7 * 86400000 GROUP BY d`).bind(userId, dayStartMs),
+    ]);
+    const r = a!.results[0]!;
+    return { memory: r.memory!, total: r.total!, r30: r.r30!, rev30: r.rev30!, ok30: r.ok30!, forecast: f!.results.map((x) => ({ d: x.d!, n: x.n! })) };
+  }
+
   /* review log */
   insertLogStmt(l: Omit<ReviewLogRow, "id" | "undone">): D1PreparedStatement {
     return this.db.prepare(
@@ -333,6 +352,13 @@ export class Repo {
     ).bind(s.userId, s.chatId, s.messageId, s.cardId, s.stale ? 1 : 0, s.lastVoiceMessageId);
   }
   async saveSession(s: Session): Promise<void> { await this.saveSessionStmt(s).run(); }
+  /** Points the session at a message/card without touching the voice message id. */
+  async setSessionMessage(userId: number, chatId: number, messageId: number, cardId: number | null): Promise<void> {
+    await this.db.prepare(
+      `INSERT INTO sessions (user_id, chat_id, message_id, card_id) VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id, card_id = excluded.card_id, stale = 0`,
+    ).bind(userId, chatId, messageId, cardId).run();
+  }
   async markSessionStale(userId: number): Promise<void> {
     await this.db.prepare("UPDATE sessions SET stale = 1 WHERE user_id = ?").bind(userId).run();
   }

@@ -95,7 +95,7 @@ export class ReviewService {
         streakBefore: user.streak, lastStudyDayBefore: user.lastStudyDay,
       }),
       this.repo.updateUserStmt(user.id, { streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1 }),
-      this.repo.bumpUsageStmt(today, 1, ROWS_PER_REVIEW),
+      this.repo.bumpUsageStmt(new Date(this.now).toISOString().slice(0, 10), 1, ROWS_PER_REVIEW),
     ];
     if (user.direction === "both") {
       const sibling: Direction = card.direction === "en_ru" ? "ru_en" : "en_ru";

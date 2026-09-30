@@ -12,5 +12,5 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["src", "test", "scripts/lib/csv.ts", "vitest.config.ts"]
+  "include": ["src", "test", "vitest.config.ts"]
 }

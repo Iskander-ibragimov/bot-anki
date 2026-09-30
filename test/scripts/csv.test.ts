@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { csvToSql, parseCsv } from "../../scripts/lib/csv";
+import { csvToSql, parseCsv } from "../../src/content/csv";
 
 describe("csv", () => {
   it("parses quoted fields with commas, quotes and newlines", () => {

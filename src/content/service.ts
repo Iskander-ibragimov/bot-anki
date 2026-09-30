@@ -109,7 +109,7 @@ export class ContentService {
   }
 
   /** Applies a typed translation to the preview being edited; returns the updated items and preview id. */
-  async editPreviewTranslation(user: User, translation: string): Promise<CardDraft[]> {
+  async editPreviewTranslation(user: User, translation: string): Promise<{ previewId: number; items: CardDraft[] }> {
     const pending = user.pendingEdit ? (JSON.parse(user.pendingEdit) as { preview?: PendingPreviewEdit }) : null;
     if (!pending?.preview) throw new Error("no preview in edit");
     const id = pending.preview.previewId;
@@ -118,7 +118,7 @@ export class ContentService {
     items[0]!.translation = translation.trim();
     await this.repo.updatePreview(id, items);
     await this.repo.updateUser(user.id, { pendingEdit: null });
-    return items;
+    return { previewId: id, items };
   }
 
   pendingKind(user: User): "manual" | "preview" | null {
