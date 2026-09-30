@@ -25,6 +25,13 @@ describe("admin", () => {
     expect(await importDeckCsv(repo, "x", "no caption", T)).toContain("deck:");
   });
 
+  it("slug stays short enough for 64-byte callback data", async () => {
+    const repo = new Repo(env.DB);
+    await importDeckCsv(repo, "word,translation\ncozy,уютный\n", "deck: Длинная | A very long English deck title about business negotiations and meetings | B2", T);
+    const d = (await env.DB.prepare("SELECT slug FROM decks").first<{ slug: string }>())!;
+    expect(new TextEncoder().encode(`ob:${d.slug}`).length).toBeLessThanOrEqual(64);
+  });
+
   it("warns the admin once when D1 writes pass 80%", async () => {
     const repo = new Repo(env.DB);
     await repo.bumpUsageStmt("2026-09-30", 1000, 81_000).run();

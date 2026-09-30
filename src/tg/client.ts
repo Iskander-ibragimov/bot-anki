@@ -15,6 +15,7 @@ export class TgClient implements TgApi {
   async call<T = unknown>(method: string, payload: Record<string, unknown>): Promise<T> {
     const res = await this.fetcher(`https://api.telegram.org/bot${this.token}/${method}`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
     });
     const body = (await res.json()) as { ok: boolean; result?: T; error_code?: number; description?: string; parameters?: { retry_after?: number } };
     if (!body.ok) throw new TgError(body.error_code ?? res.status, body.description ?? "Telegram error", body.parameters?.retry_after);

@@ -32,6 +32,8 @@ export interface User {
   lastReviewAt: number | null;
   mixCounter: number;
   createdAt: number;
+  nextDailyAt: number | null;
+  nextEveningAt: number | null;
 }
 
 export interface NoteFields {

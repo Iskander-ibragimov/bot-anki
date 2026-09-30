@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
 import { PLACEMENT_WORDS, placementLevel } from "../../src/users/placement";
-import { advanceOnboarding, getOrCreate, langFromTelegram, offsetFromReported, setSetting, startOnboarding } from "../../src/users/service";
+import { advanceOnboarding, getOrCreate, langFromTelegram, nextOccurrence, offsetFromReported, setSetting, startOnboarding } from "../../src/users/service";
 
 const T = Date.UTC(2026, 8, 30, 6, 0);
 
@@ -69,6 +69,28 @@ describe("users", () => {
     expect(user.onboardingStep).toBeNull();
     expect(user.newPerDay).toBe(20);
     expect(await repo.userDeckIds(user.id)).toEqual([deckId]);
+  });
+
+  it("first reminder is scheduled for the next occurrence, not right after onboarding", async () => {
+    const repo = new Repo(env.DB);
+    await repo.insertDeck({ slug: "a1", kind: "catalog", titleRu: "A1", titleEn: "A1", level: "A1", ownerId: null });
+    let { user } = await getOrCreate(repo, 11, 11, "ru", T);
+    await repo.updateUser(user.id, { onboardingStep: "deck", level: "A1", remindAt: "09:00", tzOffsetMin: 180 });
+    user = (await repo.getUser(user.id))!;
+    const at1500 = Date.UTC(2026, 8, 30, 12, 0); // 15:00 local
+    await advanceOnboarding(repo, user, "a1", at1500);
+    const u = (await repo.getUser(user.id))!;
+    expect(u.nextDailyAt).toBe(Date.UTC(2026, 9, 1, 6, 0)); // tomorrow 09:00 local
+    expect(u.nextEveningAt).toBe(Date.UTC(2026, 8, 30, 17, 0)); // today 20:00 local
+    expect(nextOccurrence(180, "09:00", Date.UTC(2026, 8, 30, 5, 0))).toBe(Date.UTC(2026, 8, 30, 6, 0));
+  });
+
+  it("changing the reminder time reschedules it", async () => {
+    const repo = new Repo(env.DB);
+    const { user } = await getOrCreate(repo, 12, 12, "ru", T);
+    await repo.updateUser(user.id, { onboardingStep: null, tzOffsetMin: 180 });
+    await setSetting(repo, user.id, "remindAt", "21:00", T);
+    expect((await repo.getUser(user.id))!.nextDailyAt).toBe(Date.UTC(2026, 8, 30, 18, 0));
   });
 
   it("typed local time answers the timezone step", async () => {

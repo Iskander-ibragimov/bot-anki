@@ -201,12 +201,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const u = ctx.user;
     const cycle = <T>(list: readonly T[], v: T) => list[(list.indexOf(v) + 1) % list.length]!;
     switch (ctx.match[1]) {
-      case "lang": await setSetting(repo, u.id, "lang", u.lang === "ru" ? "en" : "ru"); break;
-      case "ret": await setSetting(repo, u.id, "retention", cycle(RETENTIONS, u.retention as (typeof RETENTIONS)[number])); break;
-      case "new": await setSetting(repo, u.id, "newPerDay", cycle([5, 10, 20] as const, u.newPerDay as 5)); break;
-      case "rem": await setSetting(repo, u.id, "remindAt", cycle(REMIND_TIMES, u.remindAt as (typeof REMIND_TIMES)[number])); break;
-      case "dir": await setSetting(repo, u.id, "direction", cycle(["en_ru", "ru_en", "both"] as const, u.direction)); break;
-      case "auto": await setSetting(repo, u.id, "autoplay", !u.autoplay); break;
+      case "lang": await setSetting(repo, u.id, "lang", u.lang === "ru" ? "en" : "ru", deps.now()); break;
+      case "ret": await setSetting(repo, u.id, "retention", cycle(RETENTIONS, u.retention as (typeof RETENTIONS)[number]), deps.now()); break;
+      case "new": await setSetting(repo, u.id, "newPerDay", cycle([5, 10, 20] as const, u.newPerDay as 5), deps.now()); break;
+      case "rem": await setSetting(repo, u.id, "remindAt", cycle(REMIND_TIMES, u.remindAt as (typeof REMIND_TIMES)[number]), deps.now()); break;
+      case "dir": await setSetting(repo, u.id, "direction", cycle(["en_ru", "ru_en", "both"] as const, u.direction), deps.now()); break;
+      case "auto": await setSetting(repo, u.id, "autoplay", !u.autoplay, deps.now()); break;
     }
     const updated = (await repo.getUser(u.id))!;
     ctx.user = updated;

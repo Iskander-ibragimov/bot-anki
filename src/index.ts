@@ -21,18 +21,23 @@ export default {
       { config, repo: new Repo(env.DB), fetch: (i, init) => fetch(i, init), waitUntil: (p) => ctx.waitUntil(p), now: () => Date.now() },
       botInfo,
     );
-    if (!botInfo) { await bot.init(); botInfo = bot.botInfo; }
+    if (!botInfo) {
+      try { await bot.init(); botInfo = bot.botInfo; } catch (e) { console.error("getMe failed", e); return new Response("retry later", { status: 503 }); }
+    }
     return webhookCallback(bot, "cloudflare-mod", { secretToken: env.WEBHOOK_SECRET, timeoutMilliseconds: 25_000 })(req);
   },
 
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  /** Awaited (not waitUntil) so the cron invocation may run past 30 s if Telegram is slow. */
+  async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     const config = parseEnv(env);
     const repo = new Repo(env.DB);
     const tg = new TgClient(config.botToken);
     const now = Date.now();
-    ctx.waitUntil((async () => {
+    try {
       await tick({ repo, tg, adminChatId: config.adminTgId, now });
       await checkUsage(repo, tg, config.adminTgId, now);
-    })().catch((e) => console.error("tick failed", e)));
+    } catch (e) {
+      console.error("tick failed", e);
+    }
   },
 } satisfies ExportedHandler<Env>;

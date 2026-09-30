@@ -1,4 +1,5 @@
 import { Repo, type User } from "../../src/db/repo";
+import { nextOccurrence } from "../../src/users/service";
 
 export const WORDS: [string, string][] = [
   ["borrow", "брать взаймы"], ["receipt", "чек"], ["journey", "поездка"], ["quiet", "тихий"], ["decide", "решать"],
@@ -13,7 +14,12 @@ export async function seedUser(db: D1Database, opts: { words?: number; now: numb
     word, ipa: null, pos: "verb", translation, exampleEn: `I ${word}.`, exampleRu: `Я ${translation}.`,
   })));
   const userId = await repo.insertUser({ tgId: opts.tgId ?? 1, chatId: opts.tgId ?? 1, lang: "ru", now: opts.now });
-  await repo.updateUser(userId, { onboardingStep: null, tzOffsetMin: 180, ...(opts.patch ?? {}) });
+  const tz = opts.patch?.tzOffsetMin ?? 180;
+  await repo.updateUser(userId, {
+    onboardingStep: null, tzOffsetMin: tz,
+    nextDailyAt: nextOccurrence(tz, opts.patch?.remindAt ?? "09:00", opts.now), nextEveningAt: nextOccurrence(tz, "20:00", opts.now),
+    ...(opts.patch ?? {}),
+  });
   await repo.subscribe(userId, deckId, opts.now);
   const user = (await repo.getUser(userId))!;
   return { repo, user, deckId, noteIds };

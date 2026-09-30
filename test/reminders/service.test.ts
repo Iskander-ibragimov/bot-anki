@@ -43,19 +43,22 @@ describe("reminders tick", () => {
   });
 
   it("evening push only with a streak of 2+ and no study today", async () => {
-    const { repo, user } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { streak: 1, lastStudyDay: "2026-09-29", lastDailyPushDay: "2026-09-30" } });
+    const future = local(30, 9, 0) + 10 * 86_400_000;
+    await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 1, patch: { streak: 1, lastStudyDay: "2026-09-29", nextDailyAt: future } });
+    await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 2, patch: { streak: 3, lastStudyDay: "2026-09-29", nextDailyAt: future } });
+    await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 3, patch: { streak: 3, lastStudyDay: "2026-09-30", nextDailyAt: future } });
     const tg = fakeTelegram();
-    await run(env.DB, tg, local(30, 20, 5));
+    await run(env.DB, tg, local(30, 19, 59));
     expect(tg.of("sendMessage")).toHaveLength(0);
-    await repo.updateUser(user.id, { streak: 3 });
+    await run(env.DB, tg, local(30, 20, 5));
     await run(env.DB, tg, local(30, 20, 6));
-    await run(env.DB, tg, local(30, 20, 7));
-    expect(tg.of("sendMessage")).toHaveLength(1);
-    expect(String(tg.of("sendMessage")[0]!.payload.text)).toContain("3");
+    const sent = tg.of("sendMessage");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.payload.chat_id).toBe(2);
   });
 
   it("step ping once and never in quiet hours", async () => {
-    const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { lastDailyPushDay: "2026-09-30" } });
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
     const t0 = local(30, 12, 0);
     await repo.insertCard(user.id, noteIds[0]!, "en_ru", { ...newMem(t0), state: "learning", step: 1, due: t0 + 10 * MIN, reps: 1, lastReview: t0, stability: 2, difficulty: 5 });
     await repo.updateUser(user.id, { lastReviewAt: t0 });
@@ -103,7 +106,7 @@ describe("reminders tick", () => {
   });
 
   it("voice jobs run in the tick", async () => {
-    const { noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { lastDailyPushDay: "2026-09-30" } });
+    const { noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
     await enqueue(env.DB, "voice", { noteId: noteIds[0], audioUrl: "https://d.dev/a.mp3" }, local(30, 9, 0));
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 9, 1));
@@ -116,5 +119,33 @@ describe("reminders tick", () => {
     const db = countingDb(env.DB);
     await run(db, fakeTelegram(), local(30, 9, 1));
     expect(db.calls).toBeLessThanOrEqual(10);
+  });
+
+  it("a failed send is not retried every minute", async () => {
+    await seedUser(env.DB, { now: local(30, 8, 0), words: 1 });
+    const tg = fakeTelegram();
+    tg.failNext("sendMessage", 400, "Bad Request: chat not found");
+    await run(env.DB, tg, local(30, 9, 1));
+    await run(env.DB, tg, local(30, 9, 2));
+    expect(tg.of("sendMessage")).toHaveLength(1);
+  });
+
+  it("users are marked before sending, so a crashed send never repeats", async () => {
+    await seedUser(env.DB, { now: local(30, 8, 0), words: 1 });
+    const crashing = { call: async () => { throw new Error("network reset"); } };
+    await tick({ repo: new Repo(env.DB), tg: crashing, adminChatId: 999, now: local(30, 9, 1) }).catch(() => undefined);
+    const tg = fakeTelegram();
+    await run(env.DB, tg, local(30, 9, 2));
+    expect(tg.of("sendMessage")).toHaveLength(0);
+  });
+
+  it("the tick reads only due users (indexed next_daily_at)", async () => {
+    for (let i = 0; i < 30; i++) await seedUser(env.DB, { now: local(30, 8, 0), words: 1, tgId: 3000 + i, patch: { nextDailyAt: local(30, 9, 0) + 86_400_000 } });
+    const plan = await env.DB.prepare("EXPLAIN QUERY PLAN SELECT u.id, u.chat_id FROM users u WHERE u.next_daily_at <= CAST(?1 AS INTEGER) AND +u.active = 1 AND u.onboarding_step IS NULL ORDER BY u.next_daily_at, u.id LIMIT 35").bind(local(30, 9, 1)).all<{ detail: string }>();
+    const detail = plan.results.map((r) => r.detail).join(" ");
+    expect(detail).toMatch(/USING (COVERING )?INDEX idx_users_next_daily/);
+    expect(detail).not.toMatch(/SCAN u\b/);
+    const stepPlan = await env.DB.prepare("EXPLAIN QUERY PLAN SELECT u.id FROM users u WHERE u.last_review_at BETWEEN ?1 - 86400000 AND ?1 - 180000 AND +u.active = 1 AND u.onboarding_step IS NULL").bind(local(30, 9, 1)).all<{ detail: string }>();
+    expect(stepPlan.results.map((r) => r.detail).join(" ")).toMatch(/idx_users_last_review/);
   });
 });

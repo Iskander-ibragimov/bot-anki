@@ -31,7 +31,7 @@ export async function importDeckCsv(repo: Repo, csv: string, caption: string, no
   const [titleRu, titleEn, level] = [m[1]!.trim(), m[2]!.trim(), (m[3] ?? "").trim() || null];
   const rows = parseCsv(csv).filter((r) => r.word?.trim() && r.translation?.trim());
   if (!rows.length) return "В файле нет строк с колонками word и translation.";
-  const slug = titleEn.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || `deck_${now}`;
+  const slug = titleEn.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40).replace(/_$/, "") || `deck_${now}`;
   const existing = await repo.getDeckBySlug(slug);
   const deckId = existing?.id ?? (await repo.insertDeck({ slug, kind: "catalog", titleRu, titleEn, level, ownerId: null }));
   await repo.insertNotes(deckId, rows.map((r) => ({

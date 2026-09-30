@@ -16,6 +16,17 @@ export function localMinutes(offsetMin: number, now: number): number {
   return d.getUTCHours() * 60 + d.getUTCMinutes();
 }
 
+/** Next UTC moment (strictly after `after`) when the user's local clock shows hh:mm. */
+export function nextOccurrence(offsetMin: number, hhmm: string, after: number): number {
+  const [h, m] = hhmm.split(":").map(Number) as [number, number];
+  const localMidnight = Math.floor((after + offsetMin * MIN) / DAY) * DAY - offsetMin * MIN;
+  let t = localMidnight + (h * 60 + m) * MIN;
+  if (t <= after) t += DAY;
+  return t;
+}
+
+export const EVENING_AT = "20:00";
+
 export interface Window { dayStartMs: number; dayEndMs: number; today: string }
 
 export function dayWindow(offsetMin: number, now: number): Window {
@@ -52,7 +63,7 @@ export const RETENTIONS = [0.85, 0.9, 0.95] as const;
 export const NEW_PER_DAY = [5, 10, 20] as const;
 export const REMIND_TIMES = ["08:00", "09:00", "12:00", "19:00", "21:00"] as const;
 
-export async function setSetting(repo: Repo, userId: number, key: SettingKey, value: unknown): Promise<void> {
+export async function setSetting(repo: Repo, userId: number, key: SettingKey, value: unknown, now = Date.now()): Promise<void> {
   const bad = () => { throw new Error(`invalid ${key}: ${String(value)}`); };
   switch (key) {
     case "lang": if (value !== "ru" && value !== "en") bad(); break;
@@ -62,7 +73,12 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
     case "direction": if (!["en_ru", "ru_en", "both"].includes(value as string)) bad(); break;
     case "autoplay": if (typeof value !== "boolean") bad(); break;
   }
-  await repo.updateUser(userId, { [key]: value } as Partial<User>);
+  const patch = { [key]: value } as Partial<User>;
+  if (key === "remindAt") {
+    const u = await repo.getUser(userId);
+    if (u) patch.nextDailyAt = nextOccurrence(u.tzOffsetMin, value as string, now);
+  }
+  await repo.updateUser(userId, patch);
 }
 
 export type OnboardingScreen =
@@ -145,7 +161,10 @@ export async function advanceOnboarding(repo: Repo, user: User, answer: string, 
     const deck = await repo.getDeckBySlug(answer);
     if (!deck) return invalid;
     await repo.subscribe(user.id, deck.id, now);
-    await repo.updateUser(user.id, { onboardingStep: null, onboardingData: null });
+    await repo.updateUser(user.id, {
+      onboardingStep: null, onboardingData: null,
+      nextDailyAt: nextOccurrence(user.tzOffsetMin, user.remindAt, now), nextEveningAt: nextOccurrence(user.tzOffsetMin, EVENING_AT, now),
+    });
     return { kind: "finished", remindAt: user.remindAt, tzOffsetMin: user.tzOffsetMin, deckSlug: answer };
   }
   return invalid;
