@@ -1,0 +1,30 @@
+{
+  "name": "povtor-bot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+    "depcruise": "depcruise src --config .dependency-cruiser.cjs",
+    "deploy": "wrangler deploy",
+    "test:ci": "vitest run --coverage",
+    "set-webhook": "tsx scripts/set-webhook.ts"
+  },
+  "dependencies": {
+    "grammy": "^1.46.0",
+    "ts-fsrs": "^5.4.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "@cloudflare/workers-types": "*",
+    "@types/node": "^22.20.4",
+    "@vitest/coverage-istanbul": "~4.1.0",
+    "dependency-cruiser": "^18.4.0",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "~4.1.0",
+    "wrangler": "^4"
+  },
+  "packageManager": "pnpm@12.8.1"
+}

@@ -1,0 +1,14 @@
+name = "povtor-bot"
+main = "src/index.ts"
+workers_dev = true
+compatibility_date = "2026-08-15"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "povtor"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[triggers]
+crons = ["* * * * *"]
