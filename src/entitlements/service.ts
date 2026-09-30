@@ -17,3 +17,10 @@ export async function remaining(user: User, feature: Feature, now: number): Prom
   const used = user.gensDay === localDay(user.tzOffsetMin, now) ? user.gensCount : 0;
   return Math.max(0, DAILY_LIMITS[feature] - used);
 }
+
+/** Gives back one unit when the feature failed (e.g. AI deck generation errored). */
+export async function refund(repo: Repo, user: User, feature: Feature, now: number): Promise<void> {
+  void feature;
+  await repo.db.prepare("UPDATE users SET gens_count = MAX(0, gens_count - 1) WHERE id = ? AND gens_day = ?")
+    .bind(user.id, localDay(user.tzOffsetMin, now)).run();
+}

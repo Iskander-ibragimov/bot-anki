@@ -20,9 +20,12 @@ export class LlmUnavailable extends Error {}
 export class LlmClient {
   constructor(private readonly providers: LlmProvider[], private readonly fetcher: typeof fetch = fetch, private readonly timeoutMs = 20_000) {}
 
-  async completeJson<T extends z.ZodTypeAny>(system: string, user: string, schema: T): Promise<z.infer<T>> {
+  /** Tries providers in order; `deadline` (epoch ms) caps the whole call, not just one provider. */
+  async completeJson<T extends z.ZodTypeAny>(system: string, user: string, schema: T, deadline = Date.now() + 60_000): Promise<z.infer<T>> {
     const errors: string[] = [];
     for (const p of this.providers) {
+      const left = deadline - Date.now();
+      if (left <= 200) { errors.push("deadline reached"); break; }
       try {
         const res = await this.fetcher(`${p.baseUrl.replace(/\/$/, "")}/chat/completions`, {
           method: "POST",
@@ -31,7 +34,7 @@ export class LlmClient {
             model: p.model, temperature: 0.2, response_format: { type: "json_object" },
             messages: [{ role: "system", content: system }, { role: "user", content: user }],
           }),
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: AbortSignal.timeout(Math.min(this.timeoutMs, left)),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
@@ -44,6 +47,14 @@ export class LlmClient {
     }
     throw new LlmUnavailable(errors.join("; ") || "no providers");
   }
+}
+
+const LooseCards = z.object({ cards: z.array(z.unknown()) }).refine((x) => x.cards.some((c) => WordCardSchema.safeParse(c).success), "no valid cards");
+
+/** Word cards with per-card validation: invalid cards are dropped instead of failing the batch. */
+export async function completeCards(llm: LlmClient, system: string, user: string, deadline?: number): Promise<WordCard[]> {
+  const res = await llm.completeJson(system, user, LooseCards, deadline);
+  return res.cards.flatMap((c) => { const r = WordCardSchema.safeParse(c); return r.success ? [r.data] : []; });
 }
 
 export const WORDS_SYSTEM =

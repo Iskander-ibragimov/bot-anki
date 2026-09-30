@@ -266,7 +266,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
         if (res.kind === "ask-words") r = { text: t.askWords(esc(hostOf(res.url))), keyboard: [] };
         else if (res.kind === "empty") r = { text: t.helpAdd, keyboard: [] };
         else if (res.kind === "duplicates-only") r = { text: dups.join("\n"), keyboard: learnKeyboard(user.lang) };
-        else if (res.kind === "manual") r = { text: prefix + t.manualAsk(esc(res.word)), keyboard: [] };
+        else if (res.kind === "manual") r = { text: prefix + t.manualAsk(esc(res.word)) + (res.others.length ? "\n\n" + t.notTranslated(res.others.map(esc).join(", ")) : ""), keyboard: [] };
         else {
           const p = renderAddPreview(res.items, res.previewId, user.lang);
           const tail = res.manual.length ? "\n\n" + t.notTranslated(res.manual.map(esc).join(", ")) : "";

@@ -164,4 +164,39 @@ describe("content service", () => {
     expect(r.kind).toBe("preview");
     expect(db.calls + f.urls.length).toBeLessThanOrEqual(26);
   });
+
+  it("one invalid card does not sink the batch and untranslated words are all reported", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const svc = service(repo, T, [card("cozy", "уютный"), { ...card("iphone", "iPhone") }]);
+    const r = await svc.prepareAdd(user, "cozy\niphone\nthrive", []);
+    if (r.kind !== "preview") throw new Error(r.kind);
+    expect(r.items.map((i) => i.word)).toEqual(["cozy"]);
+    expect(r.manual).toEqual(["iphone", "thrive"]);
+  });
+
+  it("manual fallback mentions every untranslated word", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const r = await service(repo, T, "fail").prepareAdd(user, "cozy\nthrive\nawkward", []);
+    expect(r).toMatchObject({ kind: "manual", word: "cozy", others: ["thrive", "awkward"] });
+  });
+
+  it("a hanging provider is cut off by the overall deadline", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const hang = fakeFetch((u, init) => {
+      if (u.includes("dictionaryapi")) return json({}, 404);
+      return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+    });
+    const svc = new ContentService(repo, { dict: new DictionaryClient(hang), llm: new LlmClient([P("https://a/v1"), P("https://b/v1")], hang) }, T, { deadlineMs: 300 });
+    const started = Date.now();
+    const r = await svc.prepareAdd(user, "cozy", []);
+    expect(r.kind).toBe("manual");
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("failed generation refunds the daily quota", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const r = await service(repo, T, "fail").generateDeck(user, "space", 10);
+    expect(r.kind).toBe("failed");
+    expect((await repo.getUser(user.id))!.gensCount).toBe(0);
+  });
 });

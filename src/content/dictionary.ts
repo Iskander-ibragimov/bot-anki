@@ -10,10 +10,11 @@ interface ApiEntry {
 export class DictionaryClient {
   constructor(private readonly fetcher: typeof fetch = fetch, private readonly timeoutMs = 5000) {}
 
-  async lookup(word: string): Promise<DictEntry | null> {
+  async lookup(word: string, timeoutMs = this.timeoutMs): Promise<DictEntry | null> {
+    if (timeoutMs <= 0) return null;
     try {
       const res = await this.fetcher(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word.trim().toLowerCase())}`, {
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(Math.min(this.timeoutMs, timeoutMs)),
       });
       if (!res.ok) return null;
       const data = (await res.json()) as ApiEntry[];
