@@ -183,6 +183,22 @@ export class Repo {
     ).bind(userId, wordKey(word)).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleEn: r.title_en as string } : null;
   }
+  /** Batch version of findNoteForUser: one D1 call for many words, keyed by wordKey. */
+  async findNotesForUser(userId: number, words: string[]): Promise<Map<string, NoteRow & { deckTitleRu: string; deckTitleEn: string }>> {
+    const keys = [...new Set(words.map(wordKey))];
+    const out = new Map<string, NoteRow & { deckTitleRu: string; deckTitleEn: string }>();
+    if (!keys.length) return out;
+    const { results } = await this.db.prepare(
+      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.title_ru, d.title_en FROM notes n
+       JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? JOIN decks d ON d.id = n.deck_id
+       WHERE n.word_key IN (SELECT value FROM json_each(?)) ORDER BY n.id`,
+    ).bind(userId, JSON.stringify(keys)).all<Record<string, unknown>>();
+    for (const r of results) {
+      const k = r.word_key as string;
+      if (!out.has(k)) out.set(k, { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleEn: r.title_en as string });
+    }
+    return out;
+  }
   async getNote(id: number): Promise<NoteRow | null> {
     const r = await this.db.prepare(`SELECT n.id, n.deck_id, ${NOTE_COLS} FROM notes n WHERE n.id = ?`).bind(id).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
@@ -319,6 +335,33 @@ export class Repo {
   async saveSession(s: Session): Promise<void> { await this.saveSessionStmt(s).run(); }
   async markSessionStale(userId: number): Promise<void> {
     await this.db.prepare("UPDATE sessions SET stale = 1 WHERE user_id = ?").bind(userId).run();
+  }
+
+  /* previews */
+  async insertPreview(userId: number, kind: "add" | "gen", payload: unknown, now: number): Promise<number> {
+    const r = await this.db.prepare("INSERT INTO previews (user_id, kind, payload, created_at) VALUES (?, ?, ?, ?) RETURNING id")
+      .bind(userId, kind, JSON.stringify(payload), now).first<{ id: number }>();
+    return r!.id;
+  }
+  async getPreview<T>(userId: number, id: number, kind: "add" | "gen", notBefore: number): Promise<T | null> {
+    const r = await this.db.prepare("SELECT payload FROM previews WHERE id = ? AND user_id = ? AND kind = ? AND created_at >= ?")
+      .bind(id, userId, kind, notBefore).first<{ payload: string }>();
+    return r ? (JSON.parse(r.payload) as T) : null;
+  }
+  async updatePreview(id: number, payload: unknown): Promise<void> {
+    await this.db.prepare("UPDATE previews SET payload = ? WHERE id = ?").bind(JSON.stringify(payload), id).run();
+  }
+  async deletePreview(userId: number, id: number): Promise<boolean> {
+    const r = await this.db.prepare("DELETE FROM previews WHERE id = ? AND user_id = ?").bind(id, userId).run();
+    return (r.meta.changes ?? 0) > 0;
+  }
+  /** The user's own "My words" deck, created and subscribed on first use. */
+  async customDeck(userId: number, now: number): Promise<number> {
+    const r = await this.db.prepare("SELECT id FROM decks WHERE owner_id = ? AND kind = 'custom' LIMIT 1").bind(userId).first<{ id: number }>();
+    if (r) return r.id;
+    const id = await this.insertDeck({ slug: null, kind: "custom", titleRu: "Мои слова", titleEn: "My words", level: null, ownerId: userId });
+    await this.subscribe(userId, id, now);
+    return id;
   }
 
   /* usage */
