@@ -21,6 +21,8 @@ export const ru = {
   doneToday: (reviews: number, learned: number) => `Сегодня: ${reviews} повт. · +${learned} выучено`,
   doneTotals: (l: number, k: number, g: number, n: number) => `Всего: 🏆 ${l} · 🌳 ${k} · 🌿 ${g} · 🌱 ${n}`,
   doneNextLearning: (after: string) => `Карточки на закреплении вернутся через ${after}. Я напомню.`,
+  doneNewLimit: (limit: number, waiting: number) => `🌱 Новые слова на сегодня закончились: лимит — ${limit} в день. Ещё ${waiting} ждут, продолжим завтра.\nБольше новых сегодня — «🆕 Новых в день» в /settings.`,
+  deckLater: (limit: number) => `Новые слова из неё появятся завтра: сегодняшний лимит новых (${limit}) уже пройден.\nБольше новых сегодня — «🆕 Новых в день» в /settings.`,
   streak: (d: number) => `🔥 Серия: ${d} дн.`,
   addWords: "➕ Добавить слова",
   decksBtn: "📚 Колоды",

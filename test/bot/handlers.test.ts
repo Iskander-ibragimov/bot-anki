@@ -94,6 +94,39 @@ describe("bot handlers", () => {
     expect(String(h.tg.of("sendMessage").at(-1)!.payload.text)).toContain("<b>a1-two</b>");
   });
 
+  it("a deck added after today's new words are done says its words come tomorrow", async () => {
+    const { h, repo, u } = await startSession();
+    await repo.updateUser(u.id, { newPerDay: 1 });
+    const first = callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never)[3]!; // "easy": the only new card of today
+    await h.press(first, h.tg.lastMessageId());
+    expect(h.lastText()).toContain("лимит — 1 в день");
+    const b1 = (await repo.getDeckBySlug("b1"))!.id;
+    await h.press(`sub:${b1}`, 300);
+    expect(h.lastText()).toContain("B1");
+    expect(h.lastText()).toContain("появятся завтра");
+    await repo.updateUser(u.id, { newPerDay: 20 });
+    const b2 = (await repo.getDeckBySlug("b2"))!.id;
+    await h.press(`sub:${b2}`, 301);
+    expect(h.lastText()).not.toContain("появятся завтра");
+  });
+
+  it("an AI deck added after today's new words are done says the same", async () => {
+    await seedCatalog(env.DB);
+    const h = harness(env.DB, { now: T, fetch: (async () => json({ choices: [{ message: { content: JSON.stringify({ cards: [{ word: "deploy", ipa: null, pos: "verb", translation: "выкатывать", exampleEn: "We deploy on Fridays.", exampleRu: "Мы выкатываем по пятницам." }] }) } }] })) as typeof fetch });
+    await h.text("/start");
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    await repo.updateUser(u.id, { onboardingStep: null, newPerDay: 1 });
+    await repo.subscribe(u.id, (await repo.getDeckBySlug("a1"))!.id, T);
+    await h.text("/learn");
+    await h.press(callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never)[3]!, h.tg.lastMessageId());
+    await h.text("/gen devops");
+    const ok = callbacks(h.lastMarkup()).find((c) => c.startsWith("gen:ok:"))!;
+    await h.press(ok, h.tg.lastMessageId());
+    expect(h.lastText()).toContain("devops");
+    expect(h.lastText()).toContain("появятся завтра");
+  });
+
   it("the voice message of the previous card is removed with it", async () => {
     const { h, repo, u, cardMsg, grade } = await startSession();
     await repo.saveSession({ userId: u.id, chatId: 42, messageId: cardMsg, cardId: null, stale: false, lastVoiceMessageId: 77 });

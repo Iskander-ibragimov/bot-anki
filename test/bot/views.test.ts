@@ -95,13 +95,19 @@ describe("views", () => {
   });
 
   it("done screen shows day and cumulative totals", () => {
-    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, totals: { learned: 37, known: 20, learning: 14, new: 429 }, nextLearningInMs: 480_000, streak: 5 }, "ru");
+    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, totals: { learned: 37, known: 20, learning: 14, new: 429 }, nextLearningInMs: 480_000, streak: 5, newLimit: null }, "ru");
     expect(text.startsWith("✅")).toBe(true);
     expect(text).toContain("Сегодня: 24 повт. · +3 выучено");
     expect(text).toContain("Всего: 🏆 37 · 🌳 20 · 🌿 14 · 🌱 429");
     expect(text).toContain("через 8 мин");
     expect(text).toContain("🔥 Серия: 5 дн.");
     expect(keyboard.flat().map((b) => b.callback_data)).toEqual(["help:add", "decks"]);
+    expect(text).not.toContain("лимит");
+    const limited = renderDone({ reviewsToday: 52, learnedToday: 0, totals: { learned: 0, known: 10, learning: 15, new: 135 }, nextLearningInMs: null, streak: 1, newLimit: { limit: 10, waiting: 135 } }, "ru");
+    expect(limited.text).toContain("лимит — 10 в день");
+    expect(limited.text).toContain("Ещё 135");
+    expect(limited.text).toContain("/settings");
+    expect(limited.keyboard.flat().map((b) => b.callback_data)).toEqual(["help:add", "decks"]);
   });
 
   it("add preview shows one card with its link host and actions", () => {

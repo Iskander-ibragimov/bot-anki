@@ -94,6 +94,36 @@ describe("review service", () => {
     expect((await new ReviewService(repo, T).nextScreen(await u())).kind).toBe("done");
   });
 
+  it("when today's new-card limit is used up, the summary says how many new words are waiting", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 3, patch: { newPerDay: 2 } });
+    const u = async () => (await repo.getUser(user.id))!;
+    for (let i = 0; i < 2; i++) {
+      const s = asCard(await new ReviewService(repo, T).nextScreen(await u()));
+      await new ReviewService(repo, T).grade(await u(), s.view.cardId, 0, 4);
+    }
+    const done = await new ReviewService(repo, T).nextScreen(await u());
+    if (done.kind !== "done") throw new Error(done.kind);
+    expect(done.summary.newLimit).toEqual({ limit: 2, waiting: 1 });
+    expect(await new ReviewService(repo, T).newLimit(await u())).toEqual({ limit: 2, waiting: 1 });
+    // a deck added now does not "not work": its words wait for tomorrow, and the summary says so
+    const more = await repo.insertDeck({ slug: "it", kind: "catalog", titleRu: "IT", titleEn: "IT", level: null, ownerId: null });
+    await repo.insertNotes(more, [{ word: "deploy", ipa: null, pos: "", translation: "выкатывать", exampleEn: "", exampleRu: "" }]);
+    await repo.subscribe(user.id, more, T);
+    expect(await new ReviewService(repo, T).newLimit(await u())).toEqual({ limit: 2, waiting: 2 });
+    // a higher limit in settings takes effect at once
+    await repo.updateUser(user.id, { newPerDay: 5 });
+    expect(await new ReviewService(repo, T).newLimit(await u())).toBeNull();
+    expect((await new ReviewService(repo, T).nextScreen(await u())).kind).toBe("card");
+  });
+
+  it("no limit note when nothing new is left to learn", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1, patch: { newPerDay: 1 } });
+    const s = asCard(await new ReviewService(repo, T).nextScreen(user));
+    const done = await new ReviewService(repo, T).grade(user, s.view.cardId, 0, 4);
+    if (done.kind !== "done") throw new Error(done.kind);
+    expect(done.summary.newLimit).toBeNull();
+  });
+
   it("day summary counts learned today and totals by stage", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 3 });
     const id = await repo.insertCard(user.id, noteIds[0]!, "en_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 15 * DAY, scheduledDays: 15, stability: 15, difficulty: 4, reps: 4 });
