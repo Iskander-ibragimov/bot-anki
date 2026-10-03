@@ -15,7 +15,7 @@ const counts = { n: 4, l: 1, r: 12 };
 
 describe("views", () => {
   it("translation and example are inside tg-spoiler", () => {
-    const { text } = renderCard(view(), counts, iv, null, false, "ru");
+    const { text } = renderCard(view(), counts, iv, false, "ru");
     expect(text).toContain("🔵 4 · 🔴 1 · 🟢 12");
     expect(text).toContain("<b>reliable</b>");
     expect(text).toMatch(/<tg-spoiler>[^]*надёжный[^]*<\/tg-spoiler>/);
@@ -23,7 +23,7 @@ describe("views", () => {
   });
 
   it("keyboard is 2x2 with styles and short callbacks", () => {
-    const { keyboard } = renderCard(view(), counts, iv, null, true, "ru");
+    const { keyboard } = renderCard(view(), counts, iv, true, "ru");
     const grades = keyboard.slice(0, 2);
     expect(grades.map((r) => r.length)).toEqual([2, 2]);
     const flat = grades.flat();
@@ -35,41 +35,39 @@ describe("views", () => {
   });
 
   it("voice button only when audio exists; undo only when allowed", () => {
-    const { keyboard } = renderCard(view({ hasAudio: false }), counts, iv, null, false, "ru");
+    const { keyboard } = renderCard(view({ hasAudio: false }), counts, iv, false, "ru");
     expect(keyboard).toHaveLength(2);
   });
 
   it("html in word is escaped", () => {
-    const { text } = renderCard(view({ word: "<b>x&y" }), counts, iv, null, false, "en");
+    const { text } = renderCard(view({ word: "<b>x&y" }), counts, iv, false, "en");
     expect(text).toContain("&lt;b&gt;x&amp;y");
   });
 
   it("source link shows hostname", () => {
-    const { text } = renderCard(view({ sourceUrl: "https://www.youtube.com/watch?v=1&t=2" }), counts, iv, null, false, "ru");
+    const { text } = renderCard(view({ sourceUrl: "https://www.youtube.com/watch?v=1&t=2" }), counts, iv, false, "ru");
     expect(text).toContain('🔗 <a href="https://www.youtube.com/watch?v=1&amp;t=2">youtube.com</a>');
   });
 
   it("progress line shows stage, memory and review number", () => {
-    const { text } = renderCard(view(), counts, iv, null, false, "ru");
+    const { text } = renderCard(view(), counts, iv, false, "ru");
     expect(text).toContain("🌿 Учу · память ~2 дн. · повтор №4");
   });
 
-  it("feedback lines", () => {
-    const grow = renderCard(view(), counts, iv, { word: "borrow", kind: "grow", beforeDays: 2, afterMs: 11 * 86_400_000 }, false, "ru").text;
-    expect(grow).toContain("✅ <b>borrow</b> → через 11 дн. (было 2 дн.)");
-    const lapse = renderCard(view(), counts, iv, { word: "borrow", kind: "lapse", beforeDays: 40, afterMs: 600_000, keptDays: 4 }, false, "ru").text;
-    expect(lapse).toContain("↻ <b>borrow</b> → через 10 мин · память сохранена ~4 дн.");
-    const step = renderCard(view(), counts, iv, { word: "borrow", kind: "step", beforeDays: 0, afterMs: 600_000 }, false, "en").text;
-    expect(step).toContain("<b>borrow</b> → in 10 min");
+  it("card shows only the current word, nothing about the previous one", () => {
+    const { text } = renderCard(view(), counts, iv, true, "ru");
+    expect(text.split("\n")[1]).toBe("<b>reliable</b>");
+    expect(text).not.toContain("→");
   });
 
   it("ru to en direction hides the English word", () => {
-    const { text } = renderCard(view({ direction: "ru_en" }), counts, iv, null, false, "ru");
+    const { text } = renderCard(view({ direction: "ru_en" }), counts, iv, false, "ru");
     expect(text).toMatch(/^[^]*<b>надёжный<\/b>\n<tg-spoiler><b>reliable<\/b>/);
   });
 
   it("done screen shows day and cumulative totals", () => {
-    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, totals: { learned: 37, known: 20, learning: 14, new: 429 }, nextLearningInMs: 480_000, streak: 5 }, "ru", null);
+    const { text, keyboard } = renderDone({ reviewsToday: 24, learnedToday: 3, totals: { learned: 37, known: 20, learning: 14, new: 429 }, nextLearningInMs: 480_000, streak: 5 }, "ru");
+    expect(text.startsWith("✅")).toBe(true);
     expect(text).toContain("Сегодня: 24 повт. · +3 выучено");
     expect(text).toContain("Всего: 🏆 37 · 🌳 20 · 🌿 14 · 🌱 429");
     expect(text).toContain("через 8 мин");

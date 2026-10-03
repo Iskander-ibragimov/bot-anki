@@ -64,7 +64,8 @@ describe("bot handlers", () => {
     await h.press(grade, cardMsg);
     expect(h.tg.of("editMessageText")).toHaveLength(editsBefore);
     const next = h.tg.of("sendMessage").at(-1)!;
-    expect(String(next.payload.text)).toContain("→ через 10 мин");
+    expect(String(next.payload.text)).toContain("<b>a1-two</b>");
+    expect(String(next.payload.text)).not.toContain("a1-one");
     expect(String(next.payload.text)).toContain("<tg-spoiler>");
     expect(next.payload.disable_notification).toBe(true);
     expect(h.tg.of("deleteMessage").map((c) => c.payload.message_id)).toEqual([cardMsg]);
@@ -90,7 +91,7 @@ describe("bot handlers", () => {
     await h.press(grade, cardMsg);
     const strip = h.tg.of("editMessageReplyMarkup").at(-1)!;
     expect(strip.payload.message_id).toBe(cardMsg);
-    expect(String(h.tg.of("sendMessage").at(-1)!.payload.text)).toContain("→ через 10 мин");
+    expect(String(h.tg.of("sendMessage").at(-1)!.payload.text)).toContain("<b>a1-two</b>");
   });
 
   it("the voice message of the previous card is removed with it", async () => {

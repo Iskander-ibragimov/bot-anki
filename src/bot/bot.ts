@@ -64,8 +64,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (s.kind === "noundo") { if (ctx.callbackQuery) return toast(ctx, t.nothingToUndo); await ctx.reply(t.nothingToUndo); return; }
     if (s.kind === "nothing") { await toast(ctx); await send(ctx, { text: t.noDecks, keyboard: [[{ text: t.decksBtn, callback_data: "decks" }]] }); return; }
     const r = s.kind === "card"
-      ? renderCard(s.view, s.counts, s.intervals, s.feedback, s.canUndo, ctx.user.lang)
-      : renderDone(s.summary, ctx.user.lang, s.feedback);
+      ? renderCard(s.view, s.counts, s.intervals, s.canUndo, ctx.user.lang)
+      : renderDone(s.summary, ctx.user.lang);
     const cardId = s.kind === "card" ? s.view.cardId : null;
     const chatId = ctx.user.chatId;
     const old = mode === "replace" ? clickedId(ctx) : undefined;

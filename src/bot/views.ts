@@ -17,7 +17,7 @@ export function hostOf(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
 
-/** Human interval for feedback lines: "10 мин", "11 дн.", "1,2 мес.". */
+/** Human interval for the done screen: "10 мин", "11 дн.", "1,2 мес.". */
 export function formatLong(ms: number, lang: Lang): string {
   const t = dict(lang);
   const min = Math.round(ms / 60_000);
@@ -27,18 +27,6 @@ export function formatLong(ms: number, lang: Lang): string {
   const d = Math.round(ms / 86_400_000);
   if (d < 30) return `${d} ${t.unitDay}`;
   return `${(Math.round(d / 3) / 10).toString().replace(".", t.decimal)} ${t.unitMonth}`;
-}
-
-export function feedbackLine(f: Feedback, lang: Lang): string {
-  const t = dict(lang);
-  const w = `<b>${esc(f.word)}</b>`;
-  const after = formatLong(f.afterMs, lang);
-  switch (f.kind) {
-    case "grow": return t.fbGrow(w, after, f.beforeDays);
-    case "first": return t.fbFirst(w, after);
-    case "lapse": return t.fbLapse(w, after, f.keptDays ?? 1);
-    default: return t.fbStep(w, after);
-  }
 }
 
 export function progressLine(m: Mem, lang: Lang): string {
@@ -51,10 +39,9 @@ export function progressLine(m: Mem, lang: Lang): string {
   return parts.join(" · ");
 }
 
-export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, fb: Feedback | null, canUndo: boolean, lang: Lang): Rendered {
+export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang): Rendered {
   const t = dict(lang);
   const lines: string[] = [`🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`];
-  if (fb) lines.push(feedbackLine(fb, lang));
   const ipa = v.ipa ? esc(v.ipa) : "";
   const pos = v.pos ? `<i>${esc(v.pos)}</i>` : "";
   if (v.direction === "en_ru") {
@@ -83,10 +70,9 @@ export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, str
   return { text, keyboard };
 }
 
-export function renderDone(s: DaySummary, lang: Lang, fb: Feedback | null): Rendered {
+export function renderDone(s: DaySummary, lang: Lang): Rendered {
   const t = dict(lang);
   const lines: string[] = [];
-  if (fb) lines.push(feedbackLine(fb, lang));
   lines.push(t.doneTitle, t.doneToday(s.reviewsToday, s.learnedToday), t.doneTotals(s.totals.learned, s.totals.known, s.totals.learning, s.totals.new));
   if (s.nextLearningInMs != null) lines.push("", t.doneNextLearning(formatLong(s.nextLearningInMs, lang)));
   if (s.streak > 0) lines.push(t.streak(s.streak));
