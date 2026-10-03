@@ -135,4 +135,25 @@ describe("review service", () => {
     expect(u.streak).toBe(3);
     expect(u.mixCounter).toBe(1);
   });
+
+  it("new words come deck by deck by default and mixed across decks in random order", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 8, patch: { newPerDay: 20 } });
+    const second = await repo.insertDeck({ slug: "b2-x", kind: "catalog", titleRu: "B2", titleEn: "B2", level: "B2", ownerId: null });
+    await repo.insertNotes(second, Array.from({ length: 8 }, (_, i) => ({ word: `hard${i}`, ipa: null, pos: "adj", translation: "трудный", exampleEn: "", exampleRu: "" })));
+    await repo.subscribe(user.id, second, T);
+    const firstEight = async (u: typeof user) => {
+      const c = await repo.candidateCards(u.id, T, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions: ["en_ru"], newOrder: u.newOrder, limitEach: 8 });
+      return c.newNotes.map((n) => n.word);
+    };
+    const byDeck = await firstEight(user);
+    expect(byDeck.every((w) => !w.startsWith("hard"))).toBe(true);
+    await repo.updateUser(user.id, { newOrder: "random" });
+    const u = (await repo.getUser(user.id))!;
+    const mixed = await firstEight(u);
+    expect(mixed.some((w) => w.startsWith("hard"))).toBe(true);
+    expect(mixed.some((w) => !w.startsWith("hard"))).toBe(true);
+    expect(await firstEight(u)).toEqual(mixed);
+    const s = asCard(await new ReviewService(repo, T).nextScreen(u));
+    expect(s.view.word).toBe(mixed[0]);
+  });
 });

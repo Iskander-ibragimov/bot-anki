@@ -102,6 +102,112 @@ describe("bot handlers", () => {
     expect((await repo.getSession(u.id))!.lastVoiceMessageId).toBeNull();
   });
 
+  it("voice button speaks any word through synthesis, or says it is unavailable", async () => {
+    await seedCatalog(env.DB);
+    const h = harness(env.DB, { now: T, synth: async () => new Uint8Array([1, 2, 3]) });
+    await h.text("/start");
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    await repo.updateUser(u.id, { onboardingStep: null });
+    await repo.subscribe(u.id, (await repo.getDeckBySlug("a1"))!.id, T);
+    await h.text("/learn");
+    const voiceBtn = callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never).find((c) => c.startsWith("v:"))!;
+    await h.press(voiceBtn, h.tg.lastMessageId());
+    expect(h.tg.of("sendVoice")).toHaveLength(1);
+
+    const h2 = harness(env.DB, { now: T });
+    await env.DB.prepare("UPDATE notes SET audio_file_id = NULL").run();
+    await h2.press(voiceBtn, 1);
+    expect(h2.tg.of("sendVoice")).toHaveLength(0);
+    expect(h2.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe("Озвучка сейчас недоступна");
+  });
+
+  it("a photo while a card is on screen attaches the picture and re-sends the card as a blurred photo", async () => {
+    const { h, repo, u, cardMsg } = await startSession();
+    await h.photo("PIC1");
+    const sent = h.tg.of("sendPhoto").at(-1)!;
+    expect(sent.payload.photo).toBe("PIC1");
+    expect(sent.payload.has_spoiler).toBe(true);
+    expect(String(sent.payload.caption)).toContain("<b>a1-one</b>");
+    expect(callbacks(sent.payload.reply_markup as never).filter((c) => c.startsWith("g:"))).toHaveLength(4);
+    expect(h.tg.of("deleteMessage").map((c) => c.payload.message_id)).toEqual([cardMsg]);
+    expect((await repo.getSession(u.id))!.messageId).toBe(h.tg.lastMessageId());
+    // the next card has no picture and comes as a plain message again
+    await h.press(callbacks(sent.payload.reply_markup as never)[2]!, h.tg.lastMessageId());
+    expect(h.tg.of("sendPhoto")).toHaveLength(1);
+    expect(String(h.tg.of("sendMessage").at(-1)!.payload.text)).toContain("<b>a1-two</b>");
+  });
+
+  it("a photo with a caption adds a new word with that picture; a bare photo with no card asks for a word", async () => {
+    const f = (async (input: RequestInfo | URL) => (String(input).includes("dictionaryapi") ? json({}, 404) : json({}, 500))) as typeof fetch;
+    const h = harness(env.DB, { now: T, fetch: f });
+    await h.text("/start");
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    await repo.updateUser(u.id, { onboardingStep: null });
+    await h.photo("PIC0");
+    expect(h.lastText()).toContain("Подпишите фото");
+    await h.photo("PIC2", "cozy — уютный");
+    expect(h.lastText()).toContain("🖼");
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+    expect((await repo.findNoteForUser(u.id, "cozy"))!.imageFileId).toBe("PIC2");
+    await h.text("/learn");
+    expect(h.tg.of("sendPhoto").at(-1)!.payload.photo).toBe("PIC2");
+  });
+
+  it("/add explains how to add words and accepts a word right away", async () => {
+    const h = harness(env.DB, { now: T });
+    await h.text("/start");
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    await repo.updateUser(u.id, { onboardingStep: null });
+    await h.text("/add");
+    expect(h.lastText()).toContain("слово — перевод");
+    await h.text("/add thrive — процветать");
+    expect(h.lastText()).toContain("<b>thrive</b>");
+    expect(h.lastText()).toContain("процветать");
+  });
+
+  it("a photo card falls back to text if Telegram rejects the picture", async () => {
+    const { h, repo, u } = await startSession();
+    const card = (await repo.getSession(u.id))!.cardId!;
+    await repo.setUserMedia(u.id, (await repo.getCard(u.id, card))!.noteId, { imageFileId: "BROKEN" });
+    h.tg.failNext("sendPhoto", 400, "Bad Request: wrong file identifier");
+    await h.text("/learn");
+    expect(String(h.tg.of("sendMessage").at(-1)!.payload.text)).toContain("<b>a1-one</b>");
+  });
+
+  it("extra photos of an album do not touch the card on screen", async () => {
+    const { h } = await startSession();
+    await h.photo("ALB2", undefined, undefined, "group-1");
+    expect(h.tg.of("sendPhoto")).toHaveLength(0);
+    expect(h.tg.of("deleteMessage")).toHaveLength(0);
+  });
+
+  it("the voice button only plays words from the user's own decks", async () => {
+    await seedCatalog(env.DB);
+    const repo = new Repo(env.DB);
+    const strangerDeck = await repo.insertDeck({ slug: null, kind: "custom", titleRu: "Чужие", titleEn: "Other", level: null, ownerId: null });
+    const [secret] = await repo.insertNotes(strangerDeck, [{ word: "secretword", ipa: null, pos: "", translation: "секрет", exampleEn: "", exampleRu: "" }]);
+    let spoken = 0;
+    const h = harness(env.DB, { now: T, synth: async () => { spoken++; return new Uint8Array([1]); } });
+    await h.text("/start");
+    await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null });
+    await h.press(`v:${secret}`, 1);
+    expect(spoken).toBe(0);
+    expect(h.tg.of("sendVoice")).toHaveLength(0);
+  });
+
+  it("a photo captioned '/add word — перевод' adds the word, not the command", async () => {
+    const h = harness(env.DB, { now: T });
+    await h.text("/start");
+    const repo = new Repo(env.DB);
+    await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null });
+    await h.photo("PIC3", "/add cozy — уютный");
+    expect(h.lastText()).toContain("<b>cozy</b>");
+    expect(h.lastText()).not.toContain("/add");
+  });
+
   it("text with a link shows a preview with the link host; url-only asks for words", async () => {
     const f = (async (input: RequestInfo | URL) => {
       const u = String(input);
@@ -141,5 +247,8 @@ describe("bot handlers", () => {
     expect((await repo.getUser(u.id))!.retention).toBe(0.95);
     await h.press("set:dir", 200);
     expect((await repo.getUser(u.id))!.direction).toBe("ru_en");
+    await h.press("set:ord", 200);
+    expect((await repo.getUser(u.id))!.newOrder).toBe("random");
+    expect(JSON.stringify(h.lastMarkup())).toContain("вперемешку");
   });
 });

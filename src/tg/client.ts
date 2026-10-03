@@ -3,6 +3,11 @@ export interface TgApi {
   call<T = unknown>(method: string, payload: Record<string, unknown>): Promise<T>;
 }
 
+/** A file to upload (voice, photo); adapters turn it into multipart form data. */
+export class TgUpload {
+  constructor(readonly bytes: Uint8Array, readonly filename: string, readonly mime = "audio/mpeg") {}
+}
+
 export class TgError extends Error {
   constructor(readonly code: number, description: string, readonly retryAfter?: number) { super(description); }
 }
@@ -17,10 +22,20 @@ export class TgClient implements TgApi {
   constructor(private readonly token: string, private readonly fetcher: typeof fetch = (input, init) => fetch(input, init)) {}
 
   async call<T = unknown>(method: string, payload: Record<string, unknown>): Promise<T> {
-    const res = await this.fetcher(`https://api.telegram.org/bot${this.token}/${method}`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(10_000),
-    });
+    const upload = Object.values(payload).some((v) => v instanceof TgUpload);
+    let init: RequestInit;
+    if (upload) {
+      const form = new FormData();
+      for (const [k, v] of Object.entries(payload)) {
+        if (v == null) continue;
+        if (v instanceof TgUpload) form.append(k, new File([v.bytes], v.filename, { type: v.mime }));
+        else form.append(k, typeof v === "object" ? JSON.stringify(v) : String(v));
+      }
+      init = { method: "POST", body: form };
+    } else {
+      init = { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) };
+    }
+    const res = await this.fetcher(`https://api.telegram.org/bot${this.token}/${method}`, { ...init, signal: AbortSignal.timeout(10_000) });
     const body = (await res.json()) as { ok: boolean; result?: T; error_code?: number; description?: string; parameters?: { retry_after?: number } };
     if (!body.ok) throw new TgError(body.error_code ?? res.status, body.description ?? "Telegram error", body.parameters?.retry_after);
     return body.result as T;

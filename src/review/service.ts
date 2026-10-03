@@ -7,7 +7,7 @@ import { pick } from "./pick";
 export interface CardView {
   cardId: number; noteId: number; reps: number; direction: Direction;
   word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string;
-  hasAudio: boolean; sourceUrl: string | null; mem: Mem;
+  sourceUrl: string | null; imageFileId: string | null; mem: Mem;
 }
 export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number; keptDays?: number }
 export interface Counts { n: number; l: number; r: number }
@@ -34,7 +34,7 @@ function toView(row: CardRow | (NewNote & { id: number; mem: Mem })): CardView {
   return {
     cardId: row.id, noteId: row.noteId, reps: row.mem.reps, direction: row.direction, word: row.word, ipa: row.ipa, pos: row.pos,
     translation: row.translation, exampleEn: row.exampleEn, exampleRu: row.exampleRu,
-    hasAudio: !!(row.audioFileId || row.audioUrl), sourceUrl: row.sourceUrl, mem: row.mem,
+    sourceUrl: row.sourceUrl, imageFileId: row.imageFileId, mem: row.mem,
   };
 }
 
@@ -52,7 +52,7 @@ export class ReviewService {
 
   async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
-    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user) });
+    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user), newOrder: user.newOrder });
     const newLeft = Math.max(0, user.newPerDay - c.counts.newDoneToday);
     const p = pick(c, newLeft, this.now, user.mixCounter);
     const counts: Counts = { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review };
@@ -117,13 +117,19 @@ export class ReviewService {
       this.repo.markUndoneStmt(log.id),
       this.repo.updateUserStmt(user.id, { streak: log.streakBefore, lastStudyDay: log.lastStudyDayBefore }),
     ]);
-    const card = await this.repo.getCard(user.id, log.cardId);
-    if (!card) return { kind: "noundo" };
+    const screen = await this.cardScreen(user, log.cardId);
+    return screen ?? { kind: "noundo" };
+  }
+
+  /** The screen for one specific card (after undo, or when its picture changed). */
+  async cardScreen(user: User, cardId: number): Promise<Screen | null> {
+    const card = await this.repo.getCard(user.id, cardId);
+    if (!card) return null;
     const pv = preview(card.mem, this.now, user.retention);
     const intervals = {} as Record<Rating, string>;
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
     const w = dayWindow(user.tzOffsetMin, this.now);
-    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user) });
+    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user), newOrder: user.newOrder });
     const newLeft = Math.max(0, user.newPerDay - c.counts.newDoneToday);
     return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false,
       counts: { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review } };

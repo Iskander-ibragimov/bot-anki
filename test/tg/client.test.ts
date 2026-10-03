@@ -4,7 +4,7 @@ import { DictionaryClient } from "../../src/content/dictionary";
 import { LlmClient } from "../../src/content/llm";
 import { Repo } from "../../src/db/repo";
 import { tick } from "../../src/reminders/service";
-import { TgClient } from "../../src/tg/client";
+import { TgClient, TgUpload } from "../../src/tg/client";
 import { seedUser } from "../helpers/seed";
 import { z } from "zod";
 
@@ -29,6 +29,21 @@ describe("clients with the default fetch (as in the cron handler)", () => {
     const res = await new TgClient("1:token").call<{ message_id: number }>("sendMessage", { chat_id: 1, text: "hi" });
     expect(res.message_id).toBe(5);
     expect(calls[0]!.url).toBe("https://api.telegram.org/bot1:token/sendMessage");
+  });
+
+  it("TgClient uploads a file as multipart form data", async () => {
+    let seen: FormData | null = null;
+    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => {
+      seen = init.body as FormData;
+      return Promise.resolve(new Response(JSON.stringify({ ok: true, result: { message_id: 1, voice: { file_id: "F" } } })));
+    });
+    await new TgClient("1:token").call("sendVoice", { chat_id: 7, voice: new TgUpload(new Uint8Array([1, 2]), "word.mp3"), disable_notification: true });
+    expect(seen).toBeInstanceOf(FormData);
+    expect(seen!.get("chat_id")).toBe("7");
+    expect(seen!.get("disable_notification")).toBe("true");
+    const file = seen!.get("voice") as File;
+    expect(file.name).toBe("word.mp3");
+    expect(file.size).toBe(2);
   });
 
   it("the cron tick delivers the daily reminder through the real TgClient", async () => {

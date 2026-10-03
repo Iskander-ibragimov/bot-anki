@@ -6,6 +6,8 @@ export interface Env {
   WEBHOOK_SECRET: string;
   ADMIN_TG_ID: string;
   LLM_PROVIDERS: string;
+  /** Workers AI binding (speech synthesis); optional so the bot still runs without it. */
+  AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> };
 }
 
 import { ProviderSchema as Provider, type LlmProvider } from "./content/llm";

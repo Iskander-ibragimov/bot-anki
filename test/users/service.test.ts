@@ -33,6 +33,9 @@ describe("users", () => {
     await expect(setSetting(repo, user.id, "retention", 0.5)).rejects.toThrow();
     await expect(setSetting(repo, user.id, "newPerDay", 7)).rejects.toThrow();
     await expect(setSetting(repo, user.id, "remindAt", "25:00")).rejects.toThrow();
+    await expect(setSetting(repo, user.id, "newOrder", "sideways")).rejects.toThrow();
+    await setSetting(repo, user.id, "newOrder", "random");
+    expect((await repo.getUser(user.id))!.newOrder).toBe("random");
     await setSetting(repo, user.id, "retention", 0.95);
     await setSetting(repo, user.id, "direction", "both");
     const u = (await repo.getUser(user.id))!;

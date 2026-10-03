@@ -6,6 +6,7 @@ import { Repo } from "./db/repo";
 import { type Env, parseEnv } from "./env";
 import { tick } from "./reminders/service";
 import { TgClient } from "./tg/client";
+import { synthSpeech } from "./tts/workersAi";
 
 /** getMe result cached per isolate so each webhook doesn't spend a subrequest on it. */
 let botInfo: UserFromGetMe | undefined;
@@ -18,7 +19,10 @@ export default {
     if (req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("unauthorized", { status: 401 });
     const config = parseEnv(env);
     const bot = createBot(
-      { config, repo: new Repo(env.DB), fetch: (i, init) => fetch(i, init), waitUntil: (p) => ctx.waitUntil(p), now: () => Date.now() },
+      {
+        config, repo: new Repo(env.DB), fetch: (i, init) => fetch(i, init), waitUntil: (p) => ctx.waitUntil(p), now: () => Date.now(),
+        ...(env.AI ? { synth: (text: string) => synthSpeech(env.AI!, text) } : {}),
+      },
       botInfo,
     );
     if (!botInfo) {

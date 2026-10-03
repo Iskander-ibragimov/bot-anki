@@ -4,7 +4,7 @@ import type { Candidates, CardRow, NewNote } from "../../src/db/repo";
 import { newMem } from "../../src/srs/fsrs";
 
 const T = Date.UTC(2026, 8, 30, 6);
-const note = { word: "w", ipa: null, pos: "", translation: "т", exampleEn: "", exampleRu: "", audioFileId: null, audioUrl: null, sourceUrl: null };
+const note = { word: "w", ipa: null, pos: "", translation: "т", exampleEn: "", exampleRu: "", audioFileId: null, audioUrl: null, sourceUrl: null, imageFileId: null };
 const card = (id: number, state: CardRow["mem"]["state"], due: number): CardRow => ({ ...note, id, noteId: id, direction: "en_ru", buriedDay: null, mem: { ...newMem(T), state, due } });
 const fresh = (id: number): NewNote => ({ ...note, noteId: 100 + id, direction: "en_ru" });
 const cands = (learning: CardRow[], review: CardRow[], newNotes: NewNote[]): Candidates => ({ learning, review, newNotes, counts: { learning: learning.length, review: review.length, newAvailable: newNotes.length, newDoneToday: 0 } });

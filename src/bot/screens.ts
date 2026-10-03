@@ -56,7 +56,8 @@ export function renderSettings(u: User): Rendered {
     text: t.settingsTitle,
     keyboard: [
       [btn(t.setLang, "set:lang")], [btn(t.setMode(u.retention), "set:ret")], [btn(t.setNew(u.newPerDay), "set:new")],
-      [btn(t.setRemind(u.remindAt), "set:rem")], [btn(t.setDir(u.direction), "set:dir")], [btn(t.setAuto(u.autoplay), "set:auto")],
+      [btn(t.setRemind(u.remindAt), "set:rem")], [btn(t.setDir(u.direction), "set:dir")], [btn(t.setOrder(u.newOrder), "set:ord")],
+      [btn(t.setAuto(u.autoplay), "set:auto")],
     ],
   };
 }

@@ -1,7 +1,7 @@
-import { Bot, type Context, GrammyError } from "grammy";
+import { Bot, type Context, GrammyError, InputFile } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import { isAdmin, adminStatsText, importDeckCsv } from "../admin/service";
-import { playVoice } from "../content/audio";
+import { type Synth, playVoice } from "../content/audio";
 import { DictionaryClient } from "../content/dictionary";
 import { LlmClient } from "../content/llm";
 import { ContentService } from "../content/service";
@@ -12,7 +12,7 @@ import { dict } from "../i18n";
 import { ReviewService, type Screen } from "../review/service";
 import type { Rating } from "../srs/fsrs";
 import { cumulative } from "../stats/service";
-import type { TgApi } from "../tg/client";
+import { type TgApi, TgUpload } from "../tg/client";
 import { REMIND_TIMES, RETENTIONS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
 import { deckTitle, learnKeyboard, renderDecks, renderGenPreview, renderOnboarding, renderSettings, renderStats } from "./screens";
 import { type Keyboard, type Rendered, esc, hostOf, renderAddPreview, renderCard, renderDone } from "./views";
@@ -23,6 +23,8 @@ export interface BotDeps {
   fetch: typeof fetch;
   waitUntil(p: Promise<unknown>): void;
   now(): number;
+  /** Speech synthesis for words without recorded audio; absent when the AI binding is not configured. */
+  synth?: Synth;
 }
 
 type Ctx = Context & { user: User };
@@ -32,12 +34,28 @@ const isD1Limit = (e: unknown) => /daily row (read|write) limit|exceeded D1/i.te
 export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   const { repo, config } = deps;
   const bot = new Bot<Ctx>(config.botToken, botInfo ? { botInfo } : {});
-  const tg: TgApi = { call: <T>(m: string, p: Record<string, unknown>) => (bot.api.raw as unknown as Record<string, (x: unknown) => Promise<T>>)[m]!(p) };
+  const tg: TgApi = {
+    call: <T>(m: string, p: Record<string, unknown>) => {
+      const payload = Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v instanceof TgUpload ? new InputFile(v.bytes, v.filename) : v]));
+      return (bot.api.raw as unknown as Record<string, (x: unknown) => Promise<T>>)[m]!(payload);
+    },
+  };
   const content = () => new ContentService(repo, { dict: new DictionaryClient(deps.fetch), llm: new LlmClient(config.llmProviders, deps.fetch) }, deps.now());
   const reviews = () => new ReviewService(repo, deps.now());
 
   const markup = (keyboard: Keyboard) => (keyboard.length ? { inline_keyboard: keyboard } : undefined);
-  const send = async (ctx: Ctx, r: Rendered) => ctx.api.sendMessage(ctx.user.chatId, r.text, { ...HTML, reply_markup: markup(r.keyboard) });
+  /** Sends a screen; a card with a picture goes as a photo (blurred until tapped) with the text as its caption. */
+  const send = async (ctx: Ctx, r: Rendered, silent = false) => {
+    const extra = { reply_markup: markup(r.keyboard), ...(silent ? { disable_notification: true } : {}) };
+    if (r.photo) {
+      try {
+        return await ctx.api.sendPhoto(ctx.user.chatId, r.photo, { caption: r.text, parse_mode: "HTML", has_spoiler: true, ...extra });
+      } catch (e) {
+        if (!(e instanceof GrammyError)) throw e; // a broken file id or an over-long caption: show the card as text
+      }
+    }
+    return ctx.api.sendMessage(ctx.user.chatId, r.text, { ...HTML, ...extra });
+  };
   /** Edits a message; if Telegram can’t edit it, sends a new one. Returns the message id shown. */
   const editOrSend = async (ctx: Ctx, messageId: number | undefined, r: Rendered): Promise<number> => {
     if (messageId) {
@@ -55,10 +73,10 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   const clickedId = (ctx: Ctx) => ctx.callbackQuery?.message?.message_id;
 
   /**
-   * Shows a review screen. "replace" (after a grade or undo) sends a NEW message and deletes the one that was clicked:
+   * Shows a review screen. With `replace` (after a grade, undo or a new picture) it sends a NEW message and deletes that one:
    * Telegram clients keep a spoiler revealed when a message is edited, so every card needs its own message.
    */
-  const show = async (ctx: Ctx, s: Screen, mode: "replace" | "send") => {
+  const show = async (ctx: Ctx, s: Screen, replace?: number) => {
     const t = dict(ctx.user.lang);
     if (s.kind === "stale") return toast(ctx, t.staleButton);
     if (s.kind === "noundo") { if (ctx.callbackQuery) return toast(ctx, t.nothingToUndo); await ctx.reply(t.nothingToUndo); return; }
@@ -68,21 +86,20 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       : renderDone(s.summary, ctx.user.lang);
     const cardId = s.kind === "card" ? s.view.cardId : null;
     const chatId = ctx.user.chatId;
-    const old = mode === "replace" ? clickedId(ctx) : undefined;
-    if (old === undefined) {
+    if (replace === undefined) {
       const m = await send(ctx, r);
       await repo.setSessionMessage(ctx.user.id, chatId, m.message_id, cardId);
     } else {
-      const m = await ctx.api.sendMessage(chatId, r.text, { ...HTML, reply_markup: markup(r.keyboard), disable_notification: true });
+      const m = await send(ctx, r, true);
       const oldVoice = await repo.replaceSessionMessage(ctx.user.id, chatId, m.message_id, cardId);
       await Promise.all([
         // Bots can't delete messages older than 48 h; then at least take the buttons off the old card.
-        ctx.api.deleteMessage(chatId, old).catch(() => ctx.api.editMessageReplyMarkup(chatId, old).catch(() => undefined)),
+        ctx.api.deleteMessage(chatId, replace).catch(() => ctx.api.editMessageReplyMarkup(chatId, replace).catch(() => undefined)),
         oldVoice ? ctx.api.deleteMessage(chatId, oldVoice).catch(() => undefined) : undefined,
       ]);
     }
     await toast(ctx);
-    if (s.kind === "card" && ctx.user.autoplay && s.view.hasAudio) await playVoice(repo, tg, ctx.user, s.view.noteId);
+    if (s.kind === "card" && ctx.user.autoplay) await playVoice(repo, tg, ctx.user, s.view.noteId, deps.synth);
   };
 
   const onError = async (err: { ctx: Ctx; error: unknown }) => {
@@ -138,19 +155,22 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   };
 
   /* review */
-  c.command("learn", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().nextScreen(ctx.user), "send"); });
-  c.callbackQuery("learn", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().nextScreen(ctx.user), "send"); });
+  c.command("learn", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().nextScreen(ctx.user)); });
+  c.callbackQuery("learn", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().nextScreen(ctx.user)); });
   c.callbackQuery(/^g:(\d+):(\d+):([1-4])$/, async (ctx) => {
     const [, id, reps, r] = ctx.match;
-    await show(ctx, await reviews().grade(ctx.user, Number(id), Number(reps), Number(r) as Rating), "replace");
+    await show(ctx, await reviews().grade(ctx.user, Number(id), Number(reps), Number(r) as Rating), clickedId(ctx));
   });
   c.callbackQuery("u", async (ctx) => {
     const s = await reviews().undo(ctx.user);
     if (s.kind === "card") await ctx.answerCallbackQuery({ text: dict(ctx.user.lang).undone }).catch(() => undefined);
-    await show(ctx, s, "replace");
+    await show(ctx, s, clickedId(ctx));
   });
-  c.command("undo", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().undo(ctx.user), "send"); });
-  c.callbackQuery(/^v:(\d+)$/, async (ctx) => { await toast(ctx); await playVoice(repo, tg, ctx.user, Number(ctx.match[1])); });
+  c.command("undo", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().undo(ctx.user)); });
+  c.callbackQuery(/^v:(\d+)$/, async (ctx) => {
+    const played = await playVoice(repo, tg, ctx.user, Number(ctx.match[1]), deps.synth);
+    await toast(ctx, played ? undefined : dict(ctx.user.lang).voiceUnavailable);
+  });
 
   /* decks */
   c.command("decks", async (ctx) => { if (await ready(ctx)) await send(ctx, renderDecks(await repo.listDecksForUser(ctx.user.id, deps.now()), ctx.user.lang)); });
@@ -211,9 +231,42 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await toast(ctx);
   });
 
+  type RawEntity = { type: string; offset: number; length: number; url?: string };
+  const toEntities = (list: readonly RawEntity[] | undefined, shift = 0) =>
+    (list ?? []).filter((e) => e.offset >= shift).map((e) => ({ type: e.type, offset: e.offset - shift, length: e.length, url: e.url }));
+
+  /** Words (with optional links and a picture) → preview message. Slow lookups run after the webhook has answered. */
+  const addFlow = async (ctx: Ctx, text: string, entities: ReturnType<typeof toEntities>, imageFileId?: string) => {
+    const t = dict(ctx.user.lang);
+    const svc = content();
+    const m = await ctx.reply(t.searching);
+    const user = ctx.user;
+    deps.waitUntil((async () => {
+      try {
+        const res = await svc.prepareAdd(user, text, entities, imageFileId ? { imageFileId } : {});
+        const dups = "duplicates" in res ? res.duplicates.map((d) => t.dupLine(esc(d.word), esc(d.deckTitle), d.linkAdded, d.imageAdded)) : [];
+        const prefix = dups.length ? dups.join("\n") + "\n\n" : "";
+        let r: Rendered;
+        if (res.kind === "ask-words") r = { text: t.askWords(esc(hostOf(res.url))), keyboard: [] };
+        else if (res.kind === "empty") r = { text: t.helpAdd, keyboard: [] };
+        else if (res.kind === "duplicates-only") r = { text: dups.join("\n"), keyboard: learnKeyboard(user.lang) };
+        else if (res.kind === "manual") r = { text: prefix + t.manualAsk(esc(res.word)) + (res.others.length ? "\n\n" + t.notTranslated(res.others.map(esc).join(", ")) : ""), keyboard: [] };
+        else {
+          const p = renderAddPreview(res.items, res.previewId, user.lang);
+          const tail = res.manual.length ? "\n\n" + t.notTranslated(res.manual.map(esc).join(", ")) : "";
+          r = { text: prefix + p.text + tail, keyboard: p.keyboard };
+        }
+        await editOrSend(ctx, m.message_id, r);
+      } catch (e) {
+        console.error("add words failed", e);
+        await editOrSend(ctx, m.message_id, { text: isD1Limit(e) ? t.maintenance : t.genFailed, keyboard: [] }).catch(() => undefined);
+      }
+    })());
+  };
+
   /* settings, stats, help */
   c.command("settings", async (ctx) => { if (await ready(ctx)) await send(ctx, renderSettings(ctx.user)); });
-  c.callbackQuery(/^set:(lang|ret|new|rem|dir|auto)$/, async (ctx) => {
+  c.callbackQuery(/^set:(lang|ret|new|rem|dir|ord|auto)$/, async (ctx) => {
     const u = ctx.user;
     const cycle = <T>(list: readonly T[], v: T) => list[(list.indexOf(v) + 1) % list.length]!;
     switch (ctx.match[1]) {
@@ -222,6 +275,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       case "new": await setSetting(repo, u.id, "newPerDay", cycle([5, 10, 20] as const, u.newPerDay as 5), deps.now()); break;
       case "rem": await setSetting(repo, u.id, "remindAt", cycle(REMIND_TIMES, u.remindAt as (typeof REMIND_TIMES)[number]), deps.now()); break;
       case "dir": await setSetting(repo, u.id, "direction", cycle(["en_ru", "ru_en", "both"] as const, u.direction), deps.now()); break;
+      case "ord": await setSetting(repo, u.id, "newOrder", u.newOrder === "random" ? "deck" : "random", deps.now()); break;
       case "auto": await setSetting(repo, u.id, "autoplay", !u.autoplay, deps.now()); break;
     }
     const updated = (await repo.getUser(u.id))!;
@@ -247,6 +301,31 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await ctx.reply(await importDeckCsv(repo, await res.text(), caption, deps.now()), HTML);
   });
 
+  c.command("add", async (ctx) => {
+    if (!(await ready(ctx))) return;
+    const arg = String(ctx.match ?? "").trim();
+    if (!arg) { await ctx.reply(dict(ctx.user.lang).helpAdd, HTML); return; }
+    const full = ctx.message?.text ?? arg;
+    await addFlow(ctx, arg, toEntities(ctx.message?.entities, full.indexOf(arg)));
+  });
+
+  /* a picture: with a caption it is a new word; without one it goes to the card on screen */
+  c.on("message:photo", async (ctx) => {
+    const t = dict(ctx.user.lang);
+    if (ctx.user.onboardingStep) { await ctx.reply(t.chooseAbove); return; }
+    const fileId = ctx.message.photo.at(-1)!.file_id;
+    const raw = ctx.message.caption ?? "";
+    const cmd = raw.match(/^\s*\/add(?:@\w+)?\s*/)?.[0].length ?? 0; // "/add word" typed as the caption
+    if (raw.slice(cmd).trim()) return addFlow(ctx, raw.slice(cmd), toEntities(ctx.message.caption_entities, cmd), fileId);
+    if (ctx.message.media_group_id) return; // the other photos of an album: only the captioned one counts
+    const session = await repo.getSession(ctx.user.id);
+    const card = session?.cardId ? await repo.getCard(ctx.user.id, session.cardId) : null;
+    if (!session || !card) { await ctx.reply(t.photoNeedsWord); return; }
+    await content().attachImage(ctx.user, card.noteId, fileId);
+    const screen = await reviews().cardScreen(ctx.user, card.id);
+    if (screen) await show(ctx, screen, session.messageId ?? undefined);
+  });
+
   /* free text: onboarding answers, manual translations, custom words */
   c.on("message:text", async (ctx) => {
     const text = ctx.message.text;
@@ -270,30 +349,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       } catch { await ctx.reply(t.previewExpired); }
       return;
     }
-    const m = await ctx.reply(t.searching);
-    const user = ctx.user;
-    const entities = (ctx.message.entities ?? []).map((e) => ({ type: e.type, offset: e.offset, length: e.length, url: "url" in e ? (e as { url?: string }).url : undefined }));
-    deps.waitUntil((async () => {
-      try {
-        const res = await svc.prepareAdd(user, text, entities);
-        const dups = "duplicates" in res ? res.duplicates.map((d) => t.dupLine(esc(d.word), esc(d.deckTitle), d.linkAdded)) : [];
-        const prefix = dups.length ? dups.join("\n") + "\n\n" : "";
-        let r: Rendered;
-        if (res.kind === "ask-words") r = { text: t.askWords(esc(hostOf(res.url))), keyboard: [] };
-        else if (res.kind === "empty") r = { text: t.helpAdd, keyboard: [] };
-        else if (res.kind === "duplicates-only") r = { text: dups.join("\n"), keyboard: learnKeyboard(user.lang) };
-        else if (res.kind === "manual") r = { text: prefix + t.manualAsk(esc(res.word)) + (res.others.length ? "\n\n" + t.notTranslated(res.others.map(esc).join(", ")) : ""), keyboard: [] };
-        else {
-          const p = renderAddPreview(res.items, res.previewId, user.lang);
-          const tail = res.manual.length ? "\n\n" + t.notTranslated(res.manual.map(esc).join(", ")) : "";
-          r = { text: prefix + p.text + tail, keyboard: p.keyboard };
-        }
-        await editOrSend(ctx, m.message_id, r);
-      } catch (e) {
-        console.error("add words failed", e);
-        await editOrSend(ctx, m.message_id, { text: isD1Limit(e) ? t.maintenance : t.genFailed, keyboard: [] }).catch(() => undefined);
-      }
-    })());
+    await addFlow(ctx, text, toEntities(ctx.message.entities));
   });
 
   return bot;
