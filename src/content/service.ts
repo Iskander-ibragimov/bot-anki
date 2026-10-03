@@ -62,6 +62,8 @@ const PENDING_URL_MS = 10 * 60_000;
 const AWAIT_MS = 10 * 60_000;
 const PREVIEW_TTL_MS = 24 * 3_600_000;
 const DICT_TIMEOUT_MS = 3000;
+/** Reading a picture runs in the background of a webhook call, which may last about 30 s in total. */
+const READ_PHOTO_MS = 18_000;
 
 const toNote = (d: CardDraft): NoteInput => ({
   word: d.word, ipa: d.ipa, pos: d.pos, translation: d.translation, exampleEn: d.exampleEn, exampleRu: d.exampleRu,
@@ -256,7 +258,7 @@ export class ContentService {
   async readPhoto(user: User, token: string, image: { bytes: Uint8Array; mime: string } | null): Promise<PhotoAsk | null> {
     const before = pendingOf(user).photo;
     if (!before || tokenOf(before) !== token) return null;
-    const text = image && this.deps.vision?.available ? await this.deps.vision.readText(image.bytes, image.mime, Date.now() + this.deadlineMs).catch(() => null) : null;
+    const text = image && this.deps.vision?.available ? await this.deps.vision.readText(image.bytes, image.mime, Date.now() + Math.min(this.deadlineMs, READ_PHOTO_MS)).catch(() => null) : null;
     const choices = text ? wordChoices(text) : { words: [], phrase: null };
     const photo: PhotoPending = { ...before, text, ...choices };
     const kept = await this.repo.swapPendingEdit(user.id, user.pendingEdit, JSON.stringify({ photo } satisfies Pending));
@@ -360,7 +362,9 @@ export class ContentService {
       const taken = (await this.repo.findNotesForUser(user.id, [word])).get(wordKey(word));
       if (taken && taken.id !== note.id) return { kind: "duplicate", word, noteId: note.id, page: edit.page };
     }
-    await this.repo.updateCustomNote(user.id, note.id, { ...(word !== undefined ? { word } : {}), ...(translation !== undefined ? { translation } : {}) });
+    // An example sentence that no longer contains the word would only confuse.
+    const dropExample = word !== undefined && wordKey(word) !== wordKey(note.word) && !exampleFrom(note.exampleEn, word);
+    await this.repo.updateCustomNote(user.id, note.id, { ...(word !== undefined ? { word } : {}), ...(translation !== undefined ? { translation } : {}), dropExample });
     await this.repo.updateUser(user.id, { pendingEdit: null });
     return { kind: "saved", noteId: note.id, page: edit.page };
   }

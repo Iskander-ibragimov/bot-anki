@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { Repo } from "../../src/db/repo";
 import { DictionaryClient } from "../../src/content/dictionary";
 import { LlmClient } from "../../src/content/llm";
+import { runVoiceJob } from "../../src/content/audio";
 import { ContentService } from "../../src/content/service";
 import { ReviewService } from "../../src/review/service";
 import { seedUser } from "../helpers/seed";
@@ -155,6 +156,33 @@ describe("managing My words", () => {
     expect(await service(repo, T).myWord(user, other)).toMatchObject({ word: "thrive" });
   });
 
+  it("a new spelling keeps an example that still fits and drops one that does not", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const deck = await repo.customDeck(user.id, T);
+    const [id] = await repo.insertNotes(deck, [{ word: "twist", ipa: "/twɪst/", pos: "verb", translation: "крутить", exampleEn: "He twisted the cap and not twist it back.", exampleRu: "Он открутил крышку.", audioUrl: "https://a/twist.mp3" }]);
+    const rename = async (text: string) => {
+      await service(repo, T).startWordEdit(await fresh(repo, user.id), id!, 0);
+      return service(repo, T).applyWordEdit(await fresh(repo, user.id), text, []);
+    };
+    await rename("not twist");
+    expect(await service(repo, T).myWord(user, id!)).toMatchObject({ word: "not twist", exampleEn: "He twisted the cap and not twist it back.", ipa: null, audioUrl: null });
+    await rename("spin");
+    expect(await service(repo, T).myWord(user, id!)).toMatchObject({ word: "spin", exampleEn: "", exampleRu: "", pos: "" });
+  });
+
+  it("recorded audio queued for the old spelling is not attached to the renamed word", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const deck = await repo.customDeck(user.id, T);
+    const [id] = await repo.insertNotes(deck, [{ word: "cosy", ipa: null, pos: "", translation: "уютный", exampleEn: "", exampleRu: "", audioUrl: "https://a/cosy.mp3" }]);
+    await service(repo, T).startWordEdit(await fresh(repo, user.id), id!, 0);
+    await service(repo, T).applyWordEdit(await fresh(repo, user.id), "snug", []);
+    const sent: string[] = [];
+    const tg = { call: async <R>(method: string) => { sent.push(method); return { message_id: 1, voice: { file_id: "OLD" } } as R; } };
+    await runVoiceJob(repo, tg, 999, { noteId: id!, audioUrl: "https://a/cosy.mp3" });
+    expect(sent).toEqual([]);
+    expect((await repo.getNote(id!))!.audioFileId).toBeNull();
+  });
+
   it("an edit that was not started, is too old, or targets someone else's word changes nothing", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
     const id = await addCard(repo, user.id, "cozy — уютный");
@@ -186,5 +214,10 @@ describe("managing My words", () => {
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM review_log").first<{ n: number }>())!.n).toBe(1); // statistics keep the history
     expect((await new ReviewService(repo, T).nextScreen(await fresh(repo, user.id))).kind).toBe("card"); // the catalog word is next
     expect(await service(repo, T).deleteWord(user, id)).toBeNull();
+    // "undo" of the grade given to the deleted word must not rewrite the history or the streak
+    const before = await fresh(repo, user.id);
+    expect((await new ReviewService(repo, T).undo(before)).kind).toBe("noundo");
+    expect((await env.DB.prepare("SELECT undone FROM review_log").first<{ undone: number }>())!.undone).toBe(0);
+    expect(await fresh(repo, user.id)).toMatchObject({ streak: before.streak, lastStudyDay: before.lastStudyDay });
   });
 });

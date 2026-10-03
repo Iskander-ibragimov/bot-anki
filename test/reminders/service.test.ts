@@ -107,6 +107,7 @@ describe("reminders tick", () => {
 
   it("voice jobs run in the tick", async () => {
     const { noteIds } = await seedUser(env.DB, { now: local(30, 8, 0), words: 1, patch: { nextDailyAt: local(30, 9, 0) + 10 * 86_400_000 } });
+    await env.DB.prepare("UPDATE notes SET audio_url = ? WHERE id = ?").bind("https://d.dev/a.mp3", noteIds[0]!).run(); // as saved with the card
     await enqueue(env.DB, "voice", { noteId: noteIds[0], audioUrl: "https://d.dev/a.mp3" }, local(30, 9, 0));
     const tg = fakeTelegram();
     await run(env.DB, tg, local(30, 9, 1));

@@ -128,6 +128,8 @@ describe("views", () => {
     expect(one.text).toContain("Мои слова</b> · 2");
     expect(one.keyboard[0]![0]).toMatchObject({ text: "thrive — процветать", callback_data: "mw:o:7:0" });
     expect(one.keyboard[1]![0]!.text.length).toBeLessThanOrEqual(64);
+    const emoji = renderMyWords({ total: 1, page: 0, pages: 1, items: [{ id: 1, word: "a".repeat(26) + "🏠🏠 home sweet home", translation: "дом" }] }, "ru");
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(emoji.keyboard[0]![0]!.text)).toBe(false); // an emoji is never cut in half
     expect(one.keyboard.flat().map((b) => b.callback_data)).toEqual(["mw:o:7:0", "mw:o:5:0", "learn", "help:add"]);
     const mid = renderMyWords({ total: 20, page: 1, pages: 3, items }, "ru");
     expect(mid.keyboard[2]!.map((b) => b.callback_data)).toEqual(["mw:p:0", "mw:p:1", "mw:p:2"]);
@@ -157,6 +159,10 @@ describe("views", () => {
     expect(none.text).toContain("не прочитался");
     expect(none.keyboard.flat().map((b) => b.callback_data)).toEqual(["ph:no:tk"]);
     expect(renderPhotoAsk({ text: null, words: [], phrase: null, token: "tk" }, "ru", false).text).toContain("Напишите слово");
+    const bare = renderPhotoAsk({ text: "OK", words: [], phrase: null, token: "tk" }, "ru", true);
+    expect(bare.text).toContain("«OK»");
+    expect(bare.text).not.toContain("Нажмите кнопку");
+    expect(bare.text).toContain("Напишите");
     const seven = renderPhotoAsk({ text: "x", words: ["a1", "a2", "a3", "a4", "a5", "a6", "a7"], phrase: null, token: "tk" }, "ru", true);
     expect(seven.keyboard.slice(0, 3).map((row) => row.length)).toEqual([3, 3, 1]);
   });

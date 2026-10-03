@@ -18,6 +18,21 @@ describe("text read from a picture", () => {
     expect(cleanOcr("word ".repeat(100))!.length).toBeLessThanOrEqual(200);
   });
 
+  it("takes the line out of a chatty answer and treats refusals as no text", () => {
+    expect(cleanOcr('The subtitle reads: "...and not twist."')).toBe("...and not twist.");
+    expect(cleanOcr("Subtitle: ...and not twist.")).toBe("...and not twist.");
+    expect(cleanOcr('The subtitle reads: "...and not twist." Other text: theatre.example')).toBe("...and not twist.");
+    expect(cleanOcr("The text in the image says “Leave now.”")).toBe("Leave now.");
+    expect(cleanOcr("**...and not twist.**")).toBe("...and not twist.");
+    expect(cleanOcr("`...and not twist.`")).toBe("...and not twist.");
+    expect(cleanOcr("...and not twist.\n\n(Note: this is the subtitle of the frame.)")).toBe("...and not twist.");
+    expect(cleanOcr('He said "no"')).toBe('He said "no"');
+    expect(cleanOcr("First line\nsecond line")).toBe("First line second line");
+    for (const refusal of ["There is no English text in this image.", "NONE (there is no English text in the image)", "I’m sorry, but I can’t help with that.", "No text found.", "I cannot read any text here."]) {
+      expect(cleanOcr(refusal), refusal).toBeNull();
+    }
+  });
+
   it("offers the meaningful words of the line and the whole phrase", () => {
     expect(wordChoices("...and not twist.")).toEqual({ words: ["twist"], phrase: "and not twist" });
     expect(wordChoices("I've been thoroughly THOROUGH, haven't I?")).toEqual({ words: ["thoroughly", "thorough"], phrase: "I've been thoroughly THOROUGH, haven't I?" });
@@ -27,6 +42,9 @@ describe("text read from a picture", () => {
     expect(many.words).toHaveLength(8);
     expect(many.words.slice(0, 3)).toEqual(["quick", "brown", "fox"]);
     expect(wordChoices("x".repeat(50) + " " + "y".repeat(60)).phrase).toBeNull(); // too long to be a card
+    expect(wordChoices("I was--you know--busy. Stop it, John!").words).toEqual(["know", "busy", "stop", "John"]);
+    expect(wordChoices("WHO'S THERE? LEAVE NOW").words).toEqual(["leave", "now"]);
+    expect(wordChoices("He works at NASA, here's proof").words).toEqual(["works", "NASA", "proof"]);
   });
 });
 
@@ -36,6 +54,7 @@ describe("vision client", () => {
   it("base64 works for large inputs", () => {
     expect(toBase64(new Uint8Array([104, 105]))).toBe("aGk=");
     expect(toBase64(new Uint8Array(200_000)).length).toBe(Math.ceil(200_000 / 3) * 4);
+    expect(toBase64(new Uint8Array([0, 255, 128, 7]).subarray(1, 3))).toBe("/4A="); // a view into a larger buffer
   });
 
   it("sends the picture as a data URL and returns the cleaned line", async () => {

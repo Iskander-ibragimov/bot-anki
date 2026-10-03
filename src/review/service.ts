@@ -115,6 +115,8 @@ export class ReviewService {
   async undo(user: User): Promise<Screen> {
     const log = await this.repo.lastReviewLog(user.id);
     if (!log) return { kind: "noundo" };
+    // The graded word may have been deleted from "My words" since: nothing to restore, and the history stays as it is.
+    if (!(await this.repo.getCard(user.id, log.cardId))) return { kind: "noundo" };
     await this.repo.batch([
       this.repo.updateCardStmt(log.cardId, log.stateBefore),
       this.repo.markUndoneStmt(log.id),

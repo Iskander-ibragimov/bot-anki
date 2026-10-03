@@ -121,7 +121,8 @@ export function renderAwait(w: { side: "en" | "ru"; text: string; token: string 
   };
 }
 
-const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s);
+/** Shortens by characters, not UTF-16 units: an emoji is never cut in half. */
+const clip = (s: string, max: number) => { const cp = [...s]; return cp.length > max ? `${cp.slice(0, max - 1).join("").trimEnd()}…` : s; };
 const rows = <T>(list: T[], size: number): T[][] => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 
 /** The user's own dictionary: one page of words as buttons; a tap opens the word. */
@@ -165,6 +166,7 @@ export function renderPhotoAsk(a: { text: string | null; words: string[]; phrase
   const t = dict(lang);
   const cancel = [btn(t.awaitCancelBtn, `ph:no:${a.token}`)];
   if (!a.text) return { text: tried ? t.photoNoText : t.photoAskWord, keyboard: [cancel] };
+  if (!a.words.length && !a.phrase) return { text: t.photoLineType(esc(a.text)), keyboard: [cancel] };
   const keyboard: Keyboard = rows(a.words.map((w, i) => btn(w, `ph:w:${a.token}:${i}`)), 3);
   if (a.phrase) keyboard.push([btn(t.wholePhraseBtn, `ph:all:${a.token}`)]);
   keyboard.push(cancel);

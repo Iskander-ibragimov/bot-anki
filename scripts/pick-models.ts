@@ -36,17 +36,29 @@ if (process.argv[2] === "vision") {
   /** Known vision models first, then anything that looks like one; the override, if set, goes before all. */
   const order = (ids: string[], pref: string[], override: string | undefined) =>
     [...new Set([...(override ? [override] : []), ...pref.filter((p) => ids.includes(p)), ...ids])].slice(0, MAX_TRIES);
+  /** The sample frame says "...and not twist."; an answer with anything else in it would end up on the user's cards. */
+  const exact = (read: string | null) => read !== null && read.toLowerCase().replace(/[^a-z]+/g, "") === "andnottwist";
   const firstWorking = async (name: string, baseUrl: string, apiKey: string, candidates: string[]) => {
+    let silent: string | undefined; // a model that gave no answer at all: possibly just busy right now
     for (const model of candidates) {
-      const read = await new VisionClient([{ baseUrl, apiKey, model }]).readText(frame, "image/jpeg", Date.now() + 40_000);
-      if (read && /twist/i.test(read)) {
+      const client = new VisionClient([{ baseUrl, apiKey, model }]);
+      let read = await client.readText(frame, "image/jpeg", Date.now() + 40_000);
+      if (read === null) read = await client.readText(frame, "image/jpeg", Date.now() + 40_000);
+      if (exact(read)) {
         providers.push({ baseUrl, apiKey, model });
-        console.error(`::notice title=Picture reading::${name}: ${model} read the sample frame ("${read}")`);
+        console.error(`::notice title=Picture reading::${name}: ${model} read the sample frame`);
         return;
       }
+      if (read === null) silent ??= model;
       console.error(`${name}: ${model} did not read the sample frame (${read === null ? "no answer" : `"${read}"`})`);
     }
-    console.error(`::warning title=Picture reading::${name}: none of ${candidates.length} candidate models read the sample frame`);
+    if (silent) {
+      // Rate limits and timeouts must not switch the feature off until the next deploy.
+      providers.push({ baseUrl, apiKey, model: silent });
+      console.error(`::warning title=Picture reading::${name}: no model answered the check; keeping ${silent} unverified`);
+    } else {
+      console.error(`::warning title=Picture reading::${name}: none of ${candidates.length} candidate models read the sample frame`);
+    }
   };
   if (GROQ_API_KEY) {
     const ids = (await list(GROQ, GROQ_API_KEY)).map((m) => m.id).filter((id) => /llama-4|vision|llava|pixtral/i.test(id) && !/guard/i.test(id));
@@ -55,7 +67,10 @@ if (process.argv[2] === "vision") {
   if (OPENROUTER_API_KEY) {
     const sees = (m: Model) => m.architecture?.input_modalities?.includes("image") || /image/.test(m.architecture?.modality?.split("->")[0] ?? "");
     const ids = (await list(OPENROUTER, OPENROUTER_API_KEY)).filter((m) => m.id.endsWith(":free") && sees(m)).map((m) => m.id);
-    await firstWorking("openrouter", OPENROUTER, OPENROUTER_API_KEY, order(ids, OR_VISION_PREF, OPENROUTER_VISION_MODEL));
+    // Only free models: an override that would cost money is ignored.
+    const override = OPENROUTER_VISION_MODEL?.endsWith(":free") ? OPENROUTER_VISION_MODEL : undefined;
+    if (OPENROUTER_VISION_MODEL && !override) console.error(`::warning title=Picture reading::OPENROUTER_VISION_MODEL ignored: ${OPENROUTER_VISION_MODEL} is not a free model`);
+    await firstWorking("openrouter", OPENROUTER, OPENROUTER_API_KEY, order(ids, OR_VISION_PREF, override));
   }
   if (!providers.length) console.error("::warning title=Picture reading::no vision model available — a photo without a caption will ask for the word");
 } else {

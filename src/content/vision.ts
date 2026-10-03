@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import type { LlmProvider } from "./llm";
 import { cleanOcr } from "./photo";
 
@@ -6,10 +7,9 @@ const PROMPT =
   "and ignore player controls, menus, watermarks and web addresses. Reply with the text exactly as written, on one line, " +
   "with no comments and no translation. If there is no English text, reply NONE.";
 
+/** Native encoding: a hand-written loop over a 200 KB photo would use up the whole CPU allowance of a free worker. */
 export function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(binary);
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
 }
 
 /** Reads the text on a picture with an OpenAI-compatible vision model. Never throws: no text and no service both give null. */

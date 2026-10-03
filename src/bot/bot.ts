@@ -119,6 +119,15 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (!ctx.from || ctx.chat?.type !== "private") return;
     const { user } = await getOrCreate(repo, ctx.from.id, ctx.chat.id, ctx.from.language_code, deps.now());
     ctx.user = user;
+    // "Edit" and the picture button wait for the user's next message. Doing anything else instead
+    // (a button, a command) drops that request, so that it cannot capture an unrelated message later.
+    if (user.pendingEdit && (ctx.callbackQuery || ctx.message?.text?.startsWith("/"))) {
+      const kind = content().pendingKind(user);
+      if (kind === "edit" || kind === "pic") {
+        await repo.updateUser(user.id, { pendingEdit: null });
+        ctx.user = { ...user, pendingEdit: null };
+      }
+    }
     await next();
   });
 
@@ -241,7 +250,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await send(ctx, renderEntry(res, ctx.user.lang));
   };
 
-  const gone = async (ctx: Ctx) => { await editOrSend(ctx, clickedId(ctx), { text: dict(ctx.user.lang).awaitGone, keyboard: [] }); await toast(ctx); };
+  /** A button of an older request: say so and take the dead buttons away, leaving the message itself as it is. */
+  const gone = async (ctx: Ctx) => {
+    const id = clickedId(ctx);
+    if (id) await ctx.api.editMessageReplyMarkup(ctx.user.chatId, id).catch(() => undefined);
+    await toast(ctx, dict(ctx.user.lang).staleButton);
+  };
   /** Translates a claimed side with AI and turns the tapped message into the card preview. */
   const runAuto = async (ctx: Ctx, waiting: Awaiting) => {
     const user = ctx.user;
@@ -338,7 +352,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       case "e":
         await svc.startWordEdit(ctx.user, noteId, page);
         await toast(ctx);
-        await ctx.reply(t.wordEditAsk(esc(note.word)), HTML);
+        await send(ctx, { text: t.wordEditAsk(esc(note.word)), keyboard: [cancelRequest(lang)] });
         return;
       case "i": return askForPicture(ctx, noteId, page);
     }
@@ -351,9 +365,15 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (!r) return toast(ctx, t.staleButton);
     await toast(ctx);
     await send(ctx, r.hasImage
-      ? { text: t.picAskReplace(esc(r.word)), keyboard: [[{ text: t.picRemoveBtn, callback_data: `pic:rm:${noteId}` }]] }
-      : { text: t.picAsk(esc(r.word)), keyboard: [] });
+      ? { text: t.picAskReplace(esc(r.word)), keyboard: [[{ text: t.picRemoveBtn, callback_data: `pic:rm:${noteId}` }], cancelRequest(ctx.user.lang)] }
+      : { text: t.picAsk(esc(r.word)), keyboard: [cancelRequest(ctx.user.lang)] });
   };
+  const cancelRequest = (lang: User["lang"]) => [{ text: dict(lang).cancelRequestBtn, callback_data: "pend:x" }];
+  /** "Cancel" under a request to send a new text or a photo; the request itself is dropped before any handler runs. */
+  c.callbackQuery("pend:x", async (ctx) => {
+    await editOrSend(ctx, clickedId(ctx), { text: dict(ctx.user.lang).requestCancelled, keyboard: [] });
+    await toast(ctx);
+  });
   /** If the review card on screen is this word, sends it again so that it shows the change. */
   const refreshCardOf = async (ctx: Ctx, noteId: number): Promise<boolean> => {
     const session = await repo.getSession(ctx.user.id);
@@ -424,7 +444,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const fit = sizes.filter((p) => Math.max(p.width, p.height) <= 1280).at(-1) ?? sizes[0]!;
     const file = await ctx.api.getFile(fit.file_id);
     if (!file.file_path) return null;
-    const res = await deps.fetch(`https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`);
+    const res = await deps.fetch(`https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return null;
     return { bytes: new Uint8Array(await res.arrayBuffer()), mime: /\.png$/i.test(file.file_path) ? "image/png" : "image/jpeg" };
   };
@@ -439,10 +459,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (ctx.user.onboardingStep) { await ctx.reply(t.chooseAbove); return; }
     const sizes = ctx.message.photo;
     const fileId = sizes.at(-1)!.file_id;
+    const group = ctx.message.media_group_id;
+    const firstOfAlbum = group ? await repo.claimMediaGroup(ctx.user.id, group) : true;
     const raw = ctx.message.caption ?? "";
     const cmd = raw.match(/^\s*\/add(?:@\w+)?\s*/)?.[0].length ?? 0; // "/add word" typed as the caption
     if (raw.slice(cmd).trim()) return addFlow(ctx, raw.slice(cmd), toEntities(ctx.message.caption_entities, cmd), fileId);
-    if (ctx.message.media_group_id) return; // the other photos of an album: only the captioned one counts
+    if (!firstOfAlbum) return; // an album is one picture: its other photos are not cards of their own
     const svc = content();
 
     const attached = await svc.attachPendingPicture(ctx.user, fileId); // the picture button was pressed for some word
@@ -499,7 +521,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       const r = await svc.applyWordEdit(ctx.user, text, toEntities(ctx.message.entities));
       if (r?.kind === "saved") {
         const note = await svc.myWord(ctx.user, r.noteId);
-        if (note) await send(ctx, renderWord(note, r.page, ctx.user.lang));
+        if (note) { const w = renderWord(note, r.page, ctx.user.lang); await send(ctx, { ...w, text: `${t.wordSaved}\n\n${w.text}` }); }
         return;
       }
       if (r?.kind === "duplicate") { await ctx.reply(t.wordEditDuplicate(esc(r.word)), HTML); return; }

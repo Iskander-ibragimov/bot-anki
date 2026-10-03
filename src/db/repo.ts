@@ -138,6 +138,11 @@ export class Repo {
     return this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ?`).bind(...vals, id);
   }
   async updateUser(id: number, patch: Partial<Omit<User, "id">>): Promise<void> { await this.updateUserStmt(id, patch).run(); }
+  /** True for the first photo of an album; the other photos of the same album are not handled on their own. */
+  async claimMediaGroup(id: number, group: string): Promise<boolean> {
+    const r = await this.db.prepare("UPDATE users SET last_media_group = ?1 WHERE id = ?2 AND last_media_group IS NOT ?1").bind(group, id).run();
+    return r.meta.changes > 0;
+  }
   /** Changes the add-flow state only if it is still what the caller last saw (the user may have moved on meanwhile). */
   async swapPendingEdit(id: number, from: string | null, to: string | null): Promise<boolean> {
     const r = await this.db.prepare("UPDATE users SET pending_edit = ? WHERE id = ? AND pending_edit IS ?").bind(to, id, from).run();
@@ -506,17 +511,21 @@ export class Repo {
     ).bind(userId, noteId).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
   }
-  /** A new spelling drops what was looked up for the old one (transcription, recorded audio). */
-  async updateCustomNote(userId: number, noteId: number, patch: { word?: string; translation?: string }): Promise<void> {
+  /** A new spelling drops what was looked up for the old one (transcription, part of speech, recorded audio). */
+  async updateCustomNote(userId: number, noteId: number, patch: { word?: string; translation?: string; dropExample?: boolean }): Promise<void> {
     const word = patch.word?.trim() ?? null;
+    const renamed = "?1 IS NOT NULL AND ?2 != word_key";
     await this.db.prepare(
       `UPDATE notes SET
-         ipa = CASE WHEN ?1 IS NOT NULL AND ?2 != word_key THEN NULL ELSE ipa END,
-         audio_file_id = CASE WHEN ?1 IS NOT NULL AND ?2 != word_key THEN NULL ELSE audio_file_id END,
-         audio_url = CASE WHEN ?1 IS NOT NULL AND ?2 != word_key THEN NULL ELSE audio_url END,
+         ipa = CASE WHEN ${renamed} THEN NULL ELSE ipa END,
+         pos = CASE WHEN ${renamed} THEN '' ELSE pos END,
+         audio_file_id = CASE WHEN ${renamed} THEN NULL ELSE audio_file_id END,
+         audio_url = CASE WHEN ${renamed} THEN NULL ELSE audio_url END,
+         example_en = CASE WHEN ?6 THEN '' ELSE example_en END,
+         example_ru = CASE WHEN ?6 THEN '' ELSE example_ru END,
          word = COALESCE(?1, word), word_key = COALESCE(?2, word_key), translation = COALESCE(?3, translation)
        WHERE id = ?4 AND deck_id IN (SELECT id FROM decks WHERE owner_id = ?5 AND kind = 'custom')`,
-    ).bind(word, word === null ? null : wordKey(word), patch.translation ?? null, noteId, userId).run();
+    ).bind(word, word === null ? null : wordKey(word), patch.translation ?? null, noteId, userId, patch.dropExample ? 1 : 0).run();
   }
   /** Removes a card of the user's own dictionary with its progress and picture. The review history stays for statistics. */
   async deleteCustomNote(userId: number, noteId: number): Promise<boolean> {

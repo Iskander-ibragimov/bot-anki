@@ -12,6 +12,7 @@ describe("audio", () => {
   it("voice job stores the Telegram file id", async () => {
     const { repo, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
     const tg = fakeTelegram();
+    await env.DB.prepare("UPDATE notes SET audio_url = ? WHERE id = ?").bind("https://d.dev/a.mp3", noteIds[0]!).run(); // as saved with the card
     await runVoiceJob(repo, tg, 999, { noteId: noteIds[0]!, audioUrl: "https://d.dev/a.mp3" });
     expect(tg.of("sendVoice")[0]!.payload).toMatchObject({ chat_id: 999, voice: "https://d.dev/a.mp3" });
     expect((await repo.getNote(noteIds[0]!))!.audioFileId).toMatch(/^voice-/);

@@ -274,8 +274,11 @@ describe("bot handlers", () => {
     const catButtons = callbacks(h.lastMarkup());
     h.setNow(T + 2000);
     await h.text("dog");
+    const editsBefore = h.tg.of("editMessageText").length;
     await h.press(catButtons[0]!, catMsg);
-    expect(h.lastText()).toContain("уже неактуальна");
+    expect(h.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe("Эта кнопка уже неактуальна");
+    expect(h.tg.of("editMessageText")).toHaveLength(editsBefore); // the message is left as it is
+    expect(h.tg.of("editMessageReplyMarkup").at(-1)!.payload.message_id).toBe(catMsg); // only its dead buttons go
     await h.press(catButtons[1]!, catMsg);
     expect(JSON.parse((await repo.getUser(u.id))!.pendingEdit!).await.text).toBe("dog");
 
@@ -376,7 +379,8 @@ describe("bot handlers", () => {
     await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
     expect(await repo.findNoteForUser(u.id, "twist")).toMatchObject({ imageFileId: "FRAME", exampleEn: "...and not twist.", translation: "крутить" });
     await h.press(buttons[0]!, h.tg.lastMessageId());
-    expect(h.lastText()).toContain("уже неактуальна");
+    expect(h.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe("Эта кнопка уже неактуальна");
+    expect(h.lastText()).toContain("«Мои слова»"); // a second tap does not wipe the result
   });
 
   it("a picture with no readable text asks for the word; a failing reader does the same", async () => {
@@ -407,6 +411,72 @@ describe("bot handlers", () => {
     await first;
     expect(h.tg.of("deleteMessage").map((c) => c.payload.message_id)).toEqual([reading]);
     expect(JSON.parse((await repo.getUser(u.id))!.pendingEdit!).await.text).toBe("cozy");
+  });
+
+  it("an Edit or picture request that was left behind does not capture what the user does next", async () => {
+    const { h, repo, u } = await ready();
+    await h.text("cozy — уютный");
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+    await h.text("/mywords");
+    const list = h.tg.lastMessageId();
+    await h.press(callbacks(h.lastMarkup())[0]!, list);
+    const [edit, pic, , back] = callbacks(h.lastMarkup());
+
+    // Edit, then back to the list: the next message is a new card
+    await h.press(edit!, list);
+    await h.press(back!, list);
+    await h.text("pillow");
+    expect(h.lastText()).toContain("перевод по-русски");
+    expect((await repo.findNoteForUser(u.id, "cozy"))!.translation).toBe("уютный");
+    await h.press(callbacks(h.lastMarkup())[1]!, h.tg.lastMessageId());
+
+    // Edit, then a command
+    await h.press(edit!, list);
+    await h.text("/stats");
+    await h.text("подушка");
+    expect(h.lastText()).toContain("по-английски");
+    await h.press(callbacks(h.lastMarkup())[1]!, h.tg.lastMessageId());
+
+    // Edit, then the cancel button under the request
+    await h.press(edit!, list);
+    const cancel = callbacks(h.lastMarkup());
+    expect(cancel).toEqual(["pend:x"]);
+    await h.press("pend:x", h.tg.lastMessageId());
+    expect((await repo.getUser(u.id))!.pendingEdit).toBeNull();
+    expect(callbacks(h.lastMarkup())).toEqual([]);
+
+    // Picture, then anything else: the next bare photo is a new card, not a picture for cozy
+    await h.press(pic!, list);
+    expect(callbacks(h.lastMarkup())).toEqual(["pend:x"]);
+    await h.press(back!, list);
+    await h.photo("STRAY");
+    expect(h.lastText()).toContain("Напишите слово");
+    expect((await repo.findNoteForUser(u.id, "cozy"))!.imageFileId).toBeNull();
+  });
+
+  it("a mis-tapped picture button on a card is forgotten as soon as the card is graded", async () => {
+    const { h, repo, u, cardMsg, grade } = await startSession();
+    const picBtn = callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never).find((c) => c.startsWith("pic:"))!;
+    await h.press(picBtn, cardMsg);
+    await h.press(grade, cardMsg);
+    await h.photo("FRAME");
+    expect(h.tg.of("sendPhoto")).toHaveLength(0);
+    expect(h.lastText()).toContain("Напишите слово");
+    expect((await repo.findNoteForUser(u.id, "a1-one"))!.imageFileId).toBeNull();
+  });
+
+  it("an album is treated as one picture: one reply, never one per photo", async () => {
+    const { h } = await ready();
+    await h.photo("ALB1", undefined, undefined, "g1");
+    await h.photo("ALB2", undefined, undefined, "g1");
+    await h.photo("ALB3", undefined, undefined, "g1");
+    expect(h.tg.of("sendMessage").filter((c) => String(c.payload.text).includes("Напишите слово"))).toHaveLength(1);
+
+    const before = h.tg.of("sendMessage").length;
+    await h.photo("CAP1", "уютный cozy", undefined, "g2");
+    await h.photo("CAP2", undefined, undefined, "g2");
+    expect(h.tg.of("sendMessage")).toHaveLength(before + 1);
+    expect(h.lastText()).toContain("<b>cozy</b>");
   });
 
   it("a photo with a caption adds a card with that picture", async () => {
