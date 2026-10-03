@@ -44,7 +44,7 @@ describe("bot handlers", () => {
     expect(card.payload.link_preview_options).toEqual({ is_disabled: true });
   });
 
-  it("grade edits the same message and shows feedback", async () => {
+  async function startSession() {
     await seedCatalog(env.DB);
     const h = harness(env.DB, { now: T });
     await h.text("/start");
@@ -53,14 +53,52 @@ describe("bot handlers", () => {
     await repo.updateUser(u.id, { onboardingStep: null });
     await repo.subscribe(u.id, (await repo.getDeckBySlug("a1"))!.id, T);
     await h.text("/learn");
-    const sent = h.tg.of("sendMessage").at(-1)!;
-    const grade = callbacks(sent.payload.reply_markup as never)[2]!;
-    await h.press(grade, 100);
-    const edit = h.tg.of("editMessageText").at(-1)!;
-    expect(edit.payload.message_id).toBe(100);
-    expect(String(edit.payload.text)).toContain("→ через 10 мин");
-    await h.press(grade, 100);
+    const cardMsg = h.tg.lastMessageId();
+    const grade = callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never)[2]!;
+    return { h, repo, u, cardMsg, grade };
+  }
+
+  it("grade shows the next card as a new message and deletes the old one (fresh spoiler)", async () => {
+    const { h, repo, u, cardMsg, grade } = await startSession();
+    const editsBefore = h.tg.of("editMessageText").length;
+    await h.press(grade, cardMsg);
+    expect(h.tg.of("editMessageText")).toHaveLength(editsBefore);
+    const next = h.tg.of("sendMessage").at(-1)!;
+    expect(String(next.payload.text)).toContain("→ через 10 мин");
+    expect(String(next.payload.text)).toContain("<tg-spoiler>");
+    expect(next.payload.disable_notification).toBe(true);
+    expect(h.tg.of("deleteMessage").map((c) => c.payload.message_id)).toEqual([cardMsg]);
+    expect((await repo.getSession(u.id))!.messageId).toBe(h.tg.lastMessageId());
+    expect(h.tg.lastMessageId()).not.toBe(cardMsg);
+    await h.press(grade, cardMsg);
     expect(h.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe("Эта кнопка уже неактуальна");
+    expect(h.tg.of("deleteMessage")).toHaveLength(1);
+  });
+
+  it("undo also re-sends the card as a new message", async () => {
+    const { h, cardMsg, grade } = await startSession();
+    await h.press(grade, cardMsg);
+    const second = h.tg.lastMessageId();
+    await h.press("u", second);
+    expect(h.tg.of("deleteMessage").map((c) => c.payload.message_id)).toEqual([cardMsg, second]);
+    expect(String(h.tg.of("sendMessage").at(-1)!.payload.text)).toContain("a1-one");
+  });
+
+  it("if the old card can't be deleted, its buttons are removed instead", async () => {
+    const { h, cardMsg, grade } = await startSession();
+    h.tg.failNext("deleteMessage", 400, "Bad Request: message can't be deleted for everyone");
+    await h.press(grade, cardMsg);
+    const strip = h.tg.of("editMessageReplyMarkup").at(-1)!;
+    expect(strip.payload.message_id).toBe(cardMsg);
+    expect(String(h.tg.of("sendMessage").at(-1)!.payload.text)).toContain("→ через 10 мин");
+  });
+
+  it("the voice message of the previous card is removed with it", async () => {
+    const { h, repo, u, cardMsg, grade } = await startSession();
+    await repo.saveSession({ userId: u.id, chatId: 42, messageId: cardMsg, cardId: null, stale: false, lastVoiceMessageId: 77 });
+    await h.press(grade, cardMsg);
+    expect(h.tg.of("deleteMessage").map((c) => c.payload.message_id).sort()).toEqual([77, cardMsg].sort());
+    expect((await repo.getSession(u.id))!.lastVoiceMessageId).toBeNull();
   });
 
   it("text with a link shows a preview with the link host; url-only asks for words", async () => {

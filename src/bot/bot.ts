@@ -54,8 +54,11 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   const toast = async (ctx: Ctx, text?: string) => { if (ctx.callbackQuery) await ctx.answerCallbackQuery(text ? { text } : undefined).catch(() => undefined); };
   const clickedId = (ctx: Ctx) => ctx.callbackQuery?.message?.message_id;
 
-  /** Renders a review screen into the session message (edit when clicked from it, otherwise a new message). */
-  const show = async (ctx: Ctx, s: Screen, mode: "edit" | "send") => {
+  /**
+   * Shows a review screen. "replace" (after a grade or undo) sends a NEW message and deletes the one that was clicked:
+   * Telegram clients keep a spoiler revealed when a message is edited, so every card needs its own message.
+   */
+  const show = async (ctx: Ctx, s: Screen, mode: "replace" | "send") => {
     const t = dict(ctx.user.lang);
     if (s.kind === "stale") return toast(ctx, t.staleButton);
     if (s.kind === "noundo") { if (ctx.callbackQuery) return toast(ctx, t.nothingToUndo); await ctx.reply(t.nothingToUndo); return; }
@@ -63,8 +66,21 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const r = s.kind === "card"
       ? renderCard(s.view, s.counts, s.intervals, s.feedback, s.canUndo, ctx.user.lang)
       : renderDone(s.summary, ctx.user.lang, s.feedback);
-    const id = await editOrSend(ctx, mode === "edit" ? clickedId(ctx) : undefined, r);
-    await repo.setSessionMessage(ctx.user.id, ctx.user.chatId, id, s.kind === "card" ? s.view.cardId : null);
+    const cardId = s.kind === "card" ? s.view.cardId : null;
+    const chatId = ctx.user.chatId;
+    const old = mode === "replace" ? clickedId(ctx) : undefined;
+    if (old === undefined) {
+      const m = await send(ctx, r);
+      await repo.setSessionMessage(ctx.user.id, chatId, m.message_id, cardId);
+    } else {
+      const m = await ctx.api.sendMessage(chatId, r.text, { ...HTML, reply_markup: markup(r.keyboard), disable_notification: true });
+      const oldVoice = await repo.replaceSessionMessage(ctx.user.id, chatId, m.message_id, cardId);
+      await Promise.all([
+        // Bots can't delete messages older than 48 h; then at least take the buttons off the old card.
+        ctx.api.deleteMessage(chatId, old).catch(() => ctx.api.editMessageReplyMarkup(chatId, old).catch(() => undefined)),
+        oldVoice ? ctx.api.deleteMessage(chatId, oldVoice).catch(() => undefined) : undefined,
+      ]);
+    }
     await toast(ctx);
     if (s.kind === "card" && ctx.user.autoplay && s.view.hasAudio) await playVoice(repo, tg, ctx.user, s.view.noteId);
   };
@@ -126,12 +142,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   c.callbackQuery("learn", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().nextScreen(ctx.user), "send"); });
   c.callbackQuery(/^g:(\d+):(\d+):([1-4])$/, async (ctx) => {
     const [, id, reps, r] = ctx.match;
-    await show(ctx, await reviews().grade(ctx.user, Number(id), Number(reps), Number(r) as Rating), "edit");
+    await show(ctx, await reviews().grade(ctx.user, Number(id), Number(reps), Number(r) as Rating), "replace");
   });
   c.callbackQuery("u", async (ctx) => {
     const s = await reviews().undo(ctx.user);
     if (s.kind === "card") await ctx.answerCallbackQuery({ text: dict(ctx.user.lang).undone }).catch(() => undefined);
-    await show(ctx, s, "edit");
+    await show(ctx, s, "replace");
   });
   c.command("undo", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().undo(ctx.user), "send"); });
   c.callbackQuery(/^v:(\d+)$/, async (ctx) => { await toast(ctx); await playVoice(repo, tg, ctx.user, Number(ctx.match[1])); });

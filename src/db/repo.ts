@@ -393,6 +393,17 @@ export class Repo {
        ON CONFLICT (user_id) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id, card_id = excluded.card_id, stale = 0`,
     ).bind(userId, chatId, messageId, cardId).run();
   }
+  /** Moves the session to a freshly sent message and forgets the old voice message; returns that voice id so it can be deleted. One D1 call. */
+  async replaceSessionMessage(userId: number, chatId: number, messageId: number, cardId: number | null): Promise<number | null> {
+    const [prev] = await this.db.batch<{ last_voice_message_id: number | null }>([
+      this.db.prepare("SELECT last_voice_message_id FROM sessions WHERE user_id = ?").bind(userId),
+      this.db.prepare(
+        `INSERT INTO sessions (user_id, chat_id, message_id, card_id) VALUES (?, ?, ?, ?)
+         ON CONFLICT (user_id) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id, card_id = excluded.card_id, stale = 0, last_voice_message_id = NULL`,
+      ).bind(userId, chatId, messageId, cardId),
+    ]);
+    return prev?.results[0]?.last_voice_message_id ?? null;
+  }
   async markSessionStale(userId: number): Promise<void> {
     await this.db.prepare("UPDATE sessions SET stale = 1 WHERE user_id = ?").bind(userId).run();
   }

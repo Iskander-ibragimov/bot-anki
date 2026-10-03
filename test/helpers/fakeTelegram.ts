@@ -30,6 +30,7 @@ export function fakeTelegram() {
     failNext(method: string, status: number, description: string, retry_after?: number) {
       failures.set(method, { status, description, retry_after });
     },
+    lastMessageId() { return nextMessageId - 1; },
     of(method: string) { return calls.filter((c) => c.method === method); },
   };
 }
