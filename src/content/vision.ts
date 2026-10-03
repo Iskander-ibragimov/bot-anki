@@ -29,7 +29,7 @@ export class VisionClient {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${p.apiKey}` },
           body: JSON.stringify({
-            model: p.model, temperature: 0, max_tokens: 200,
+            model: p.model, temperature: 0, max_tokens: 600,
             messages: [{ role: "user", content: [{ type: "text", text: PROMPT }, { type: "image_url", image_url: { url } }] }],
           }),
           signal: AbortSignal.timeout(Math.min(this.timeoutMs, left)),
