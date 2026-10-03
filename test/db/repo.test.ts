@@ -41,7 +41,7 @@ describe("repo", () => {
     expect(c.learning.map((x) => x.word)).toEqual(["borrow"]);
     expect(c.review.map((x) => x.word)).toEqual(["Apple"]);
     expect(c.newNotes.map((x) => x.word)).toEqual(["quiet"]);
-    expect(c.counts).toEqual({ learning: 1, review: 1, newAvailable: 1, newDoneToday: 0 });
+    expect(c.counts).toEqual({ learning: 1, review: 1, newAvailable: 1, newOwn: 0, newDoneToday: 0 });
     expect(c.learning[0]!.mem.state).toBe("learning");
   });
 

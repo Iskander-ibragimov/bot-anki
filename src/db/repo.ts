@@ -56,8 +56,9 @@ export type NoteInput = Pick<NoteFields, "word" | "ipa" | "pos" | "translation" 
   Partial<Pick<NoteFields, "audioFileId" | "audioUrl" | "sourceUrl">>;
 export interface NoteRow extends NoteFields { id: number; deckId: number }
 export interface CardRow extends NoteFields { id: number; noteId: number; direction: Direction; mem: Mem; buriedDay: string | null }
-export interface NewNote extends NoteFields { noteId: number; direction: Direction }
-export interface QueueCounts { learning: number; review: number; newAvailable: number; newDoneToday: number }
+/** `own`: the note is from the user's dictionary ("My words") and is not limited by the daily number of new cards. */
+export interface NewNote extends NoteFields { noteId: number; direction: Direction; own: boolean }
+export interface QueueCounts { learning: number; review: number; newAvailable: number; /** part of newAvailable that is in "My words" */ newOwn: number; newDoneToday: number }
 export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: NewNote[]; counts: QueueCounts }
 export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number; newOrder?: NewOrder }
 export interface Session { userId: number; chatId: number; messageId: number | null; cardId: number | null; stale: boolean; lastVoiceMessageId: number | null }
@@ -135,6 +136,10 @@ export class Repo {
     return this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ?`).bind(...vals, id);
   }
   async updateUser(id: number, patch: Partial<Omit<User, "id">>): Promise<void> { await this.updateUserStmt(id, patch).run(); }
+  /** Puts the add-flow state back only if the user has not started something else meanwhile. */
+  async restorePendingEdit(id: number, pendingEdit: string): Promise<void> {
+    await this.db.prepare("UPDATE users SET pending_edit = ? WHERE id = ? AND pending_edit IS NULL").bind(pendingEdit, id).run();
+  }
 
   /* decks and notes */
   async insertDeck(d: { slug: string | null; kind: DeckRow["kind"]; titleRu: string; titleEn: string; level: string | null; ownerId: number | null }): Promise<number> {
@@ -335,20 +340,24 @@ export class Repo {
     const inDecks = "n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?)";
     // "random" is a fixed scatter (Knuth multiplicative hash of the note id, offset per user), stable between calls.
     const random = w.newOrder === "random";
-    const newOrderBy = random ? "((n.id + ? * 977) * 2654435761) % 4294967296, d.value" : "n.deck_id, n.id, d.value";
+    // The user's dictionary comes first, then their AI decks, then catalog words.
+    const ownFirst = "(SELECT CASE dk.kind WHEN 'custom' THEN 0 WHEN 'catalog' THEN 2 ELSE 1 END FROM decks dk WHERE dk.id = n.deck_id)";
+    const isOwn = "n.deck_id IN (SELECT id FROM decks WHERE kind = 'custom')";
+    const newOrderBy = `${ownFirst}, ${random ? "((n.id + ? * 977) * 2654435761) % 4294967296, d.value" : "n.deck_id, n.id, d.value"}`;
     const [learning, review, fresh, counts] = await this.db.batch<Record<string, unknown>>([
       this.db.prepare(`SELECT ${CARD_COLS} ${CARD_FROM}
         WHERE c.user_id = ? AND c.state IN ('learning','relearning') AND ${inDirs} AND ${inDecks} ORDER BY c.due LIMIT ?`).bind(userId, dirs, userId, lim),
       this.db.prepare(`SELECT ${CARD_COLS} ${CARD_FROM}
         WHERE c.user_id = ? AND c.state = 'review' AND c.due < ? AND ${inDirs} AND ${notBuried} AND ${inDecks} ORDER BY c.due LIMIT ?`)
         .bind(userId, w.dayEndMs, dirs, w.today, userId, lim),
-      this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS_M} FROM notes n JOIN json_each(?) d
+      this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${isOwn} AS own, ${NOTE_COLS_M} FROM notes n JOIN json_each(?) d
         LEFT JOIN user_note_media m ON m.note_id = n.id AND m.user_id = ?
         WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY ${newOrderBy} LIMIT ?`).bind(dirs, userId, userId, userId, w.today, ...(random ? [userId] : []), lim),
       this.db.prepare(`SELECT
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state IN ('learning','relearning') AND c.direction IN (SELECT value FROM json_each(?2)) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS learning,
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,
           (SELECT COUNT(*) FROM notes n JOIN json_each(?2) d WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1) AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?4))) AS new_available,
+          (SELECT COUNT(*) FROM notes n JOIN json_each(?2) d WHERE n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1) AND ${isOwn} AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ?1 AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?4))) AS new_own,
           (SELECT COUNT(*) FROM review_log WHERE user_id = ?1 AND was_new = 1 AND undone = 0 AND reviewed_at >= ?5) AS new_done_today`)
         .bind(userId, dirs, w.dayEndMs, w.today, w.dayStartMs),
     ]);
@@ -356,8 +365,8 @@ export class Repo {
     return {
       learning: learning!.results.map(rowToCard),
       review: review!.results.map(rowToCard),
-      newNotes: fresh!.results.map((r) => ({ ...noteFields(r), noteId: r.note_id as number, direction: r.direction as Direction })),
-      counts: { learning: c.learning as number, review: c.review as number, newAvailable: c.new_available as number, newDoneToday: c.new_done_today as number },
+      newNotes: fresh!.results.map((r) => ({ ...noteFields(r), noteId: r.note_id as number, direction: r.direction as Direction, own: !!r.own })),
+      counts: { learning: c.learning as number, review: c.review as number, newAvailable: c.new_available as number, newOwn: c.new_own as number, newDoneToday: c.new_done_today as number },
     };
     void now;
   }
@@ -469,6 +478,16 @@ export class Repo {
     const id = await this.insertDeck({ slug: null, kind: "custom", titleRu: "Мои слова", titleEn: "My words", level: null, ownerId: userId });
     await this.subscribe(userId, id, now);
     return id;
+  }
+
+  /** The user's own dictionary ("My words"): total and the newest cards. */
+  async listCustomNotes(userId: number, limit: number): Promise<{ total: number; items: { word: string; translation: string }[] }> {
+    const own = "n.deck_id IN (SELECT id FROM decks WHERE owner_id = ? AND kind = 'custom')";
+    const [count, rows] = await this.db.batch<Record<string, unknown>>([
+      this.db.prepare(`SELECT COUNT(*) AS total FROM notes n WHERE ${own}`).bind(userId),
+      this.db.prepare(`SELECT n.word, n.translation FROM notes n WHERE ${own} ORDER BY n.id DESC LIMIT ?`).bind(userId, limit),
+    ]);
+    return { total: (count!.results[0]!.total as number) ?? 0, items: rows!.results.map((r) => ({ word: r.word as string, translation: r.translation as string })) };
   }
 
   /* usage */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderAddPreview, renderCard, renderDone, type CardView } from "../../src/bot/views";
+import { renderAddPreview, renderAwait, renderCard, renderDone, renderMyWords, type CardView } from "../../src/bot/views";
 import { en } from "../../src/i18n/en";
 import { ru } from "../../src/i18n/ru";
 import { newMem } from "../../src/srs/fsrs";
@@ -104,16 +104,35 @@ describe("views", () => {
     expect(keyboard.flat().map((b) => b.callback_data)).toEqual(["help:add", "decks"]);
   });
 
-  it("add preview shows link host and actions", () => {
-    const one = renderAddPreview([{ word: "resilient", ipa: "/rɪˈzɪliənt/", pos: "adj", translation: "стойкий", exampleEn: "Kids are resilient.", exampleRu: "Дети стойкие.", sourceUrl: "https://example.com/a" }], 5, "ru");
+  it("add preview shows one card with its link host and actions", () => {
+    const one = renderAddPreview({ word: "resilient", ipa: "/rɪˈzɪliənt/", pos: "adj", translation: "стойкий", exampleEn: "Kids are resilient.", exampleRu: "Дети стойкие.", sourceUrl: "https://example.com/a" }, 5, "ru");
+    expect(one.text).toContain("<b>resilient</b>");
     expect(one.text).toContain("🔗 example.com");
     expect(one.keyboard.flat().map((b) => b.callback_data)).toEqual(["add:ok:5", "add:edit:5", "add:no:5"]);
-    const many = renderAddPreview([
-      { word: "a", ipa: null, pos: "", translation: "а", exampleEn: "", exampleRu: "", sourceUrl: null },
-      { word: "b", ipa: null, pos: "", translation: "б", exampleEn: "", exampleRu: "", sourceUrl: "https://x.org" },
-    ], 6, "en");
-    expect(many.text).toContain("• <b>b</b> — б 🔗");
-    expect(many.keyboard.flat().map((b) => b.callback_data)).toEqual(["add:ok:6", "add:no:6"]);
+  });
+
+  it("a single side asks for the other language and offers auto-translation", () => {
+    const en = renderAwait({ side: "en", text: "break <the> ice", token: "abc" }, "ru");
+    expect(en.text).toContain("<b>break &lt;the&gt; ice</b>");
+    expect(en.text).toContain("по-русски");
+    expect(en.keyboard.flat().map((b) => b.callback_data)).toEqual(["tr:auto:abc", "tr:no:abc"]);
+    expect(renderAwait({ side: "ru", text: "уютный", token: "abc" }, "ru").text).toContain("по-английски");
+  });
+
+  it("my words: empty hint, list, and a note when only the latest are shown", () => {
+    expect(renderMyWords({ total: 0, items: [] }, "ru").text).toContain("пока пуст");
+    const some = renderMyWords({ total: 3, items: [{ word: "thrive", translation: "процветать" }, { word: "a<b", translation: "x" }] }, "ru");
+    expect(some.text).toContain("Мои слова</b> · 3");
+    expect(some.text).toContain("• <b>thrive</b> — процветать");
+    expect(some.text).toContain("a&lt;b");
+    expect(some.text).toContain("последние 2");
+    expect(some.keyboard.flat().map((b) => b.callback_data)).toEqual(["learn", "help:add"]);
+    // 30 long phrases must still fit into one Telegram message
+    const long = Array.from({ length: 30 }, (_, i) => ({ word: `${i} ${"very long phrase & ".repeat(5)}`.slice(0, 100), translation: "очень длинный перевод, ".repeat(14).slice(0, 300) }));
+    const big = renderMyWords({ total: 30, items: long }, "ru");
+    expect(big.text.length).toBeLessThanOrEqual(4096);
+    expect(big.text).toContain("…");
+    expect(big.text).toContain("• <b>0 very long");
   });
 
   it("ru and en have the same keys", () => {

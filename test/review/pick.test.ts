@@ -6,8 +6,8 @@ import { newMem } from "../../src/srs/fsrs";
 const T = Date.UTC(2026, 8, 30, 6);
 const note = { word: "w", ipa: null, pos: "", translation: "т", exampleEn: "", exampleRu: "", audioFileId: null, audioUrl: null, sourceUrl: null, imageFileId: null };
 const card = (id: number, state: CardRow["mem"]["state"], due: number): CardRow => ({ ...note, id, noteId: id, direction: "en_ru", buriedDay: null, mem: { ...newMem(T), state, due } });
-const fresh = (id: number): NewNote => ({ ...note, noteId: 100 + id, direction: "en_ru" });
-const cands = (learning: CardRow[], review: CardRow[], newNotes: NewNote[]): Candidates => ({ learning, review, newNotes, counts: { learning: learning.length, review: review.length, newAvailable: newNotes.length, newDoneToday: 0 } });
+const fresh = (id: number, own = false): NewNote => ({ ...note, noteId: 100 + id, direction: "en_ru", own });
+const cands = (learning: CardRow[], review: CardRow[], newNotes: NewNote[]): Candidates => ({ learning, review, newNotes, counts: { learning: learning.length, review: review.length, newAvailable: newNotes.length, newOwn: newNotes.filter((n) => n.own).length, newDoneToday: 0 } });
 
 describe("pick", () => {
   it("due learning card comes first", () => {
@@ -28,6 +28,13 @@ describe("pick", () => {
 
   it("no learn-ahead beyond 60s", () => {
     expect(pick(cands([card(1, "learning", T + 61_000)], [], [fresh(1)]), 0, T, 0)).toBeNull();
+  });
+
+  it("the user's own new words come before reviews and do not depend on the daily limit", () => {
+    const reviews = [card(10, "review", T - 1000)];
+    expect(pick(cands([], reviews, [fresh(1, true), fresh(2)]), 0, T, 0)).toEqual({ kind: "new", note: expect.objectContaining({ noteId: 101 }) });
+    expect(pick(cands([card(1, "learning", T - 1)], reviews, [fresh(1, true)]), 5, T, 0)).toEqual({ kind: "card", card: expect.objectContaining({ id: 1 }) });
+    expect(pick(cands([], reviews, [fresh(2)]), 0, T, 0)).toEqual({ kind: "card", card: expect.objectContaining({ id: 10 }) });
   });
 
   it("respects zero new left", () => {

@@ -1,4 +1,4 @@
-import type { CardRow, Direction, NewNote, Repo, User } from "../db/repo";
+import type { CardRow, Direction, NewNote, QueueCounts, Repo, User } from "../db/repo";
 import { type Mem, type Rating, formatInterval, grade as fsrsGrade, memoryDays, newMem, preview, stage } from "../srs/fsrs";
 import { dayWindow, localDay } from "../users/service";
 import { pick } from "./pick";
@@ -30,6 +30,9 @@ export const directionsOf = (u: Pick<User, "direction">): Direction[] =>
   u.direction === "both" ? ["en_ru", "ru_en"] : [u.direction];
 export const displayDirection = (u: Pick<User, "direction">): Direction => (u.direction === "ru_en" ? "ru_en" : "en_ru");
 
+/** New cards still to come today: the user's own words always, the rest within the daily limit. */
+const newCount = (newLeft: number, q: QueueCounts) => q.newOwn + Math.min(newLeft, q.newAvailable - q.newOwn);
+
 function toView(row: CardRow | (NewNote & { id: number; mem: Mem })): CardView {
   return {
     cardId: row.id, noteId: row.noteId, reps: row.mem.reps, direction: row.direction, word: row.word, ipa: row.ipa, pos: row.pos,
@@ -55,7 +58,7 @@ export class ReviewService {
     const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user), newOrder: user.newOrder });
     const newLeft = Math.max(0, user.newPerDay - c.counts.newDoneToday);
     const p = pick(c, newLeft, this.now, user.mixCounter);
-    const counts: Counts = { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review };
+    const counts: Counts = { n: newCount(newLeft, c.counts), l: c.counts.learning, r: c.counts.review };
     if (!p) {
       const s = await this.repo.summary(user.id, w.dayStartMs, displayDirection(user));
       const totals = { learned: s.learned, known: s.known, learning: s.learning, new: s.new };
@@ -132,6 +135,6 @@ export class ReviewService {
     const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user), newOrder: user.newOrder });
     const newLeft = Math.max(0, user.newPerDay - c.counts.newDoneToday);
     return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false,
-      counts: { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review } };
+      counts: { n: newCount(newLeft, c.counts), l: c.counts.learning, r: c.counts.review } };
   }
 }

@@ -138,36 +138,6 @@ describe("bot handlers", () => {
     expect(String(h.tg.of("sendMessage").at(-1)!.payload.text)).toContain("<b>a1-two</b>");
   });
 
-  it("a photo with a caption adds a new word with that picture; a bare photo with no card asks for a word", async () => {
-    const f = (async (input: RequestInfo | URL) => (String(input).includes("dictionaryapi") ? json({}, 404) : json({}, 500))) as typeof fetch;
-    const h = harness(env.DB, { now: T, fetch: f });
-    await h.text("/start");
-    const repo = new Repo(env.DB);
-    const u = (await repo.getUserByTg(42))!;
-    await repo.updateUser(u.id, { onboardingStep: null });
-    await h.photo("PIC0");
-    expect(h.lastText()).toContain("Подпишите фото");
-    await h.photo("PIC2", "cozy — уютный");
-    expect(h.lastText()).toContain("🖼");
-    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
-    expect((await repo.findNoteForUser(u.id, "cozy"))!.imageFileId).toBe("PIC2");
-    await h.text("/learn");
-    expect(h.tg.of("sendPhoto").at(-1)!.payload.photo).toBe("PIC2");
-  });
-
-  it("/add explains how to add words and accepts a word right away", async () => {
-    const h = harness(env.DB, { now: T });
-    await h.text("/start");
-    const repo = new Repo(env.DB);
-    const u = (await repo.getUserByTg(42))!;
-    await repo.updateUser(u.id, { onboardingStep: null });
-    await h.text("/add");
-    expect(h.lastText()).toContain("слово — перевод");
-    await h.text("/add thrive — процветать");
-    expect(h.lastText()).toContain("<b>thrive</b>");
-    expect(h.lastText()).toContain("процветать");
-  });
-
   it("a photo card falls back to text if Telegram rejects the picture", async () => {
     const { h, repo, u } = await startSession();
     const card = (await repo.getSession(u.id))!.cardId!;
@@ -208,23 +178,147 @@ describe("bot handlers", () => {
     expect(h.lastText()).not.toContain("/add");
   });
 
-  it("text with a link shows a preview with the link host; url-only asks for words", async () => {
-    const f = (async (input: RequestInfo | URL) => {
-      const u = String(input);
-      if (u.includes("dictionaryapi")) return json({}, 404);
-      return json({ choices: [{ message: { content: JSON.stringify({ cards: [{ word: "cozy", ipa: null, pos: "adj", translation: "уютный", exampleEn: "A cozy room.", exampleRu: "Уютная комната." }] }) } }] });
-    }) as typeof fetch;
-    const h = harness(env.DB, { now: T, fetch: f });
+  const ready = async (f?: typeof fetch) => {
+    const h = harness(env.DB, { now: T, ...(f ? { fetch: f } : {}) });
     await h.text("/start");
     const repo = new Repo(env.DB);
-    await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null });
+    const u = (await repo.getUserByTg(42))!;
+    await repo.updateUser(u.id, { onboardingStep: null });
+    return { h, repo, u };
+  };
+  const aiFetch = (async (input: RequestInfo | URL) => {
+    if (String(input).includes("dictionaryapi")) return json({}, 404);
+    return json({ choices: [{ message: { content: JSON.stringify({ cards: [{ word: "cozy", ipa: null, pos: "adj", translation: "уютный", exampleEn: "A cozy room.", exampleRu: "Уютная комната." }] }) } }] });
+  }) as typeof fetch;
+
+  it("a pair typed in any order is previewed and saved to My words", async () => {
+    const { h, repo, u } = await ready();
+    await h.text("растопить лёд break the ice");
+    expect(h.lastText()).toContain("<b>break the ice</b>");
+    expect(h.lastText()).toContain("растопить лёд");
+    expect(callbacks(h.lastMarkup())).toEqual([expect.stringMatching(/^add:ok:/), expect.stringMatching(/^add:edit:/), expect.stringMatching(/^add:no:/)]);
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+    expect(h.lastText()).toContain("«Мои слова»");
+    expect(h.lastText()).toContain("всего 1");
+    expect(callbacks(h.lastMarkup())).toEqual(["learn", "help:add", "mywords"]);
+    expect((await repo.findNoteForUser(u.id, "break the ice"))!.translation).toBe("растопить лёд");
+  });
+
+  it("one side first: the bot waits for the other side or translates on request", async () => {
+    const { h } = await ready(aiFetch);
     await h.text("cozy https://example.com/a", [{ type: "url", offset: 5, length: 21 }]);
-    expect(h.tg.of("sendMessage").at(-1)!.payload.text).toBe("🔎 Ищу слова…");
+    expect(h.lastText()).toContain("<b>cozy</b>");
+    expect(callbacks(h.lastMarkup())).toEqual([expect.stringMatching(/^tr:auto:\w+$/), expect.stringMatching(/^tr:no:\w+$/)]);
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+    expect(h.lastText()).toContain("уютный");
     expect(h.lastText()).toContain("🔗 example.com");
-    await h.press(callbacks(h.lastMarkup())[0]!, 300);
-    expect(h.lastText()).toContain("✅ Добавлено");
+    expect(callbacks(h.lastMarkup())[0]).toMatch(/^add:ok:/);
+
+    await h.text("thrive");
+    await h.text("процветать");
+    expect(h.lastText()).toContain("<b>thrive</b>");
+    expect(h.lastText()).toContain("процветать");
+
+    await h.text("счастливая случайность");
+    expect(h.lastText()).toContain("по-английски");
+    await h.press(callbacks(h.lastMarkup())[1]!, h.tg.lastMessageId());
+    expect(callbacks(h.lastMarkup())).toEqual([]);
+  });
+
+  it("auto-translation that fails keeps the word and lets the user retry or type the other side", async () => {
+    const { h, repo, u } = await ready(); // the default fetch answers 500: no AI available
+    await h.text("serendipity");
+    const buttons = callbacks(h.lastMarkup());
+    await h.press(buttons[0]!, h.tg.lastMessageId());
+    expect(h.lastText()).toContain("Не получилось перевести «serendipity»");
+    expect(callbacks(h.lastMarkup())).toEqual(buttons);
+    await h.text("счастливая случайность");
+    expect(h.lastText()).toContain("<b>serendipity</b>");
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+    expect((await repo.findNoteForUser(u.id, "serendipity"))!.translation).toBe("счастливая случайность");
+  });
+
+  it("buttons under an older word do not act on the newest one; a second tap on Add changes nothing", async () => {
+    const { h, repo, u } = await ready(aiFetch);
+    h.setNow(T + 1000);
+    await h.text("cat");
+    const catMsg = h.tg.lastMessageId();
+    const catButtons = callbacks(h.lastMarkup());
+    h.setNow(T + 2000);
+    await h.text("dog");
+    await h.press(catButtons[0]!, catMsg);
+    expect(h.lastText()).toContain("уже неактуальна");
+    await h.press(catButtons[1]!, catMsg);
+    expect(JSON.parse((await repo.getUser(u.id))!.pendingEdit!).await.text).toBe("dog");
+
+    await h.text("thrive — процветать");
+    const ok = callbacks(h.lastMarkup())[0]!;
+    await h.press(ok, h.tg.lastMessageId());
+    await h.press(ok, h.tg.lastMessageId());
+    expect(h.lastText()).toContain("«Мои слова»");
+    expect(h.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe("Эта кнопка уже неактуальна");
+    expect((await repo.listCustomNotes(u.id, 10)).total).toBe(1);
+  });
+
+  it("after Edit and then Add, the next message is a new card, not a translation for the old one", async () => {
+    const { h } = await ready();
+    await h.text("Tom & Jerry — Том и Джерри");
+    const [ok, edit] = callbacks(h.lastMarkup());
+    const preview = h.tg.lastMessageId();
+    await h.press(edit!, preview);
+    const ask = h.tg.of("sendMessage").at(-1)!;
+    expect(ask.payload.text).toContain("Tom &amp; Jerry");
+    expect(ask.payload.parse_mode).toBe("HTML");
+    await h.press(ok!, preview);
+    await h.text("thrive — процветать");
+    expect(h.lastText()).toContain("<b>thrive</b>");
+  });
+
+  it("a photo sent right after a word goes to the card being built", async () => {
+    const { h, repo, u } = await ready();
+    await h.text("cozy");
+    await h.photo("PIC7");
+    expect(h.lastText()).toContain("🖼");
+    expect(h.lastText()).toContain("<b>cozy</b>");
+    expect(callbacks(h.lastMarkup())[0]).toMatch(/^tr:auto:/);
+    await h.text("уютный");
+    expect(h.lastText()).toContain("🖼");
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+    expect((await repo.findNoteForUser(u.id, "cozy"))!.imageFileId).toBe("PIC7");
+  });
+
+  it("several cards in one message get a hint instead of being added", async () => {
+    const { h } = await ready();
+    await h.text("cozy\nthrive\nawkward");
+    expect(h.lastText()).toContain("по одной");
     await h.text("https://youtu.be/q", [{ type: "url", offset: 0, length: 18 }]);
     expect(h.lastText()).toContain("youtu.be");
+  });
+
+  it("/add explains the formats and accepts a card right away; /mywords shows the dictionary", async () => {
+    const { h } = await ready();
+    await h.text("/add");
+    expect(h.lastText()).toContain("в любом порядке");
+    await h.text("/mywords");
+    expect(h.lastText()).toContain("пока пуст");
+    await h.text("/add thrive — процветать");
+    expect(h.lastText()).toContain("<b>thrive</b>");
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+    await h.press("mywords", h.tg.lastMessageId());
+    expect(h.lastText()).toContain("Мои слова");
+    expect(h.lastText()).toContain("• <b>thrive</b> — процветать");
+  });
+
+  it("a photo with a caption adds a card with that picture; a bare photo with no card asks for a word", async () => {
+    const { h, repo, u } = await ready();
+    await h.photo("PIC0");
+    expect(h.lastText()).toContain("Подпишите фото");
+    await h.photo("PIC2", "уютный cozy");
+    expect(h.lastText()).toContain("🖼");
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+    expect((await repo.findNoteForUser(u.id, "cozy"))!.imageFileId).toBe("PIC2");
+    await h.text("/learn");
+    expect(h.tg.of("sendPhoto").at(-1)!.payload.photo).toBe("PIC2");
   });
 
   it("D1 daily limit error answers with maintenance and does not throw", async () => {
