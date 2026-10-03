@@ -18,7 +18,7 @@ export class LlmUnavailable extends Error {}
 
 /** OpenAI-compatible chat client that tries providers in order until one returns valid JSON. */
 export class LlmClient {
-  constructor(private readonly providers: LlmProvider[], private readonly fetcher: typeof fetch = fetch, private readonly timeoutMs = 20_000) {}
+  constructor(private readonly providers: LlmProvider[], private readonly fetcher: typeof fetch = (input, init) => fetch(input, init), private readonly timeoutMs = 20_000) {}
 
   /** Tries providers in order; `deadline` (epoch ms) caps the whole call, not just one provider. */
   async completeJson<T extends z.ZodTypeAny>(system: string, user: string, schema: T, deadline = Date.now() + 60_000): Promise<z.infer<T>> {

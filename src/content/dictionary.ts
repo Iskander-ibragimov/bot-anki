@@ -8,7 +8,7 @@ interface ApiEntry {
 
 /** Free Dictionary API (dictionaryapi.dev): transcription, part of speech, an example and audio. */
 export class DictionaryClient {
-  constructor(private readonly fetcher: typeof fetch = fetch, private readonly timeoutMs = 5000) {}
+  constructor(private readonly fetcher: typeof fetch = (input, init) => fetch(input, init), private readonly timeoutMs = 5000) {}
 
   async lookup(word: string, timeoutMs = this.timeoutMs): Promise<DictEntry | null> {
     if (timeoutMs <= 0) return null;

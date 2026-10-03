@@ -9,8 +9,12 @@ export class TgError extends Error {
 
 export interface TgMessage { message_id: number; voice?: { file_id: string }; audio?: { file_id: string } }
 
+/**
+ * The default fetcher is a wrapper, not `fetch` itself: on Workers, calling fetch as a method of another object
+ * (this.fetcher(...)) throws "Illegal invocation".
+ */
 export class TgClient implements TgApi {
-  constructor(private readonly token: string, private readonly fetcher: typeof fetch = fetch) {}
+  constructor(private readonly token: string, private readonly fetcher: typeof fetch = (input, init) => fetch(input, init)) {}
 
   async call<T = unknown>(method: string, payload: Record<string, unknown>): Promise<T> {
     const res = await this.fetcher(`https://api.telegram.org/bot${this.token}/${method}`, {
