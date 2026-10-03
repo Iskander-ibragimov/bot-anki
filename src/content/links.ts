@@ -1,10 +1,11 @@
 /** Minimal shape of a Telegram MessageEntity we care about (offsets are UTF-16, like JS strings). */
 export interface Entity { type: string; offset: number; length: number; url?: string }
-export interface WordLink { word: string; url: string | null }
+export interface WordLink { word: string; url: string | null; /** The user's own translation from a "word — перевод" line. */ translation?: string }
 export interface Parsed { items: WordLink[]; orphanUrl: string | null }
 
 const MAX_ITEMS = 20;
 const MAX_URL = 512;
+const CYR = /[А-Яа-яЁё]/;
 const RAW_URL = /https?:\/\/[^\s<>"]+/gi;
 
 export function cleanUrl(raw: string): string | null {
@@ -68,11 +69,17 @@ export function parseWordsAndLinks(text: string, entities: Entity[]): Parsed {
       cursor = Math.max(cursor, s.end);
     }
     word += text.slice(cursor, lineEnd);
+    let translation: string | undefined;
+    const split = word.match(/^(.+?)(?:\s+[—–-]\s+|\s*=\s*)(.+)$/);
+    if (split && !CYR.test(split[1]!) && CYR.test(split[2]!)) {
+      word = split[1]!;
+      translation = tidy(split[2]!) || undefined;
+    }
     word = tidy(word);
     const url = inLine.find((s) => s.url)?.url ?? null;
     if (word) {
       const key = word.toLowerCase();
-      if (!seen.has(key) && items.length < MAX_ITEMS) { seen.add(key); items.push({ word, url }); }
+      if (!seen.has(key) && items.length < MAX_ITEMS) { seen.add(key); items.push(translation ? { word, url, translation } : { word, url }); }
     } else if (url && !shared) shared = url;
     lineStart = lineEnd + 1;
   }

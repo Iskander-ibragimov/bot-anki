@@ -80,7 +80,10 @@ function rowToUser(r: Record<string, unknown>): User {
 const NOTE_COLS = "n.word, n.ipa, n.pos, n.translation, n.example_en, n.example_ru, n.audio_file_id, n.audio_url, n.source_url";
 /** A note/direction is "new" unless its card was started, or any card of the note is buried today. Binds: userId, today. */
 const NEW_FILTER = `NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ? AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?))`;
-const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${NOTE_COLS}`;
+/** Note columns with the user's own media (alias m = user_note_media) layered over the shared note. */
+const NOTE_COLS_M = "n.word, n.ipa, n.pos, n.translation, n.example_en, n.example_ru, n.audio_file_id, n.audio_url, COALESCE(m.source_url, n.source_url) AS source_url, m.image_file_id";
+const CARD_FROM = "FROM cards c JOIN notes n ON n.id = c.note_id LEFT JOIN user_note_media m ON m.note_id = n.id AND m.user_id = c.user_id";
+const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${NOTE_COLS_M}`;
 
 function noteFields(r: Record<string, unknown>): NoteFields {
   return {
@@ -185,8 +188,9 @@ export class Repo {
   /** A note with this word in any deck the user is subscribed to. */
   async findNoteForUser(userId: number, word: string): Promise<(NoteRow & { deckTitleRu: string; deckTitleEn: string }) | null> {
     const r = await this.db.prepare(
-      `SELECT n.id, n.deck_id, ${NOTE_COLS}, d.title_ru, d.title_en FROM notes n
+      `SELECT n.id, n.deck_id, ${NOTE_COLS_M}, d.title_ru, d.title_en FROM notes n
        JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? JOIN decks d ON d.id = n.deck_id
+       LEFT JOIN user_note_media m ON m.note_id = n.id AND m.user_id = ud.user_id
        WHERE n.word_key = ? LIMIT 1`,
     ).bind(userId, wordKey(word)).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number, deckTitleRu: r.title_ru as string, deckTitleEn: r.title_en as string } : null;
@@ -197,8 +201,9 @@ export class Repo {
     const out = new Map<string, NoteRow & { deckTitleRu: string; deckTitleEn: string }>();
     if (!keys.length) return out;
     const { results } = await this.db.prepare(
-      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS}, d.title_ru, d.title_en FROM notes n
+      `SELECT n.id, n.deck_id, n.word_key, ${NOTE_COLS_M}, d.title_ru, d.title_en FROM notes n
        JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? JOIN decks d ON d.id = n.deck_id
+       LEFT JOIN user_note_media m ON m.note_id = n.id AND m.user_id = ud.user_id
        WHERE n.word_key IN (SELECT value FROM json_each(?)) ORDER BY n.id`,
     ).bind(userId, JSON.stringify(keys)).all<Record<string, unknown>>();
     for (const r of results) {
@@ -211,8 +216,15 @@ export class Repo {
     const r = await this.db.prepare(`SELECT n.id, n.deck_id, ${NOTE_COLS} FROM notes n WHERE n.id = ?`).bind(id).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
   }
-  async setNoteSourceUrl(noteId: number, url: string): Promise<void> {
-    await this.db.prepare("UPDATE notes SET source_url = ? WHERE id = ? AND source_url IS NULL").bind(url, noteId).run();
+  /** The user's own picture/link for a word; a given value replaces the stored one, a missing one keeps it. */
+  setUserMediaStmt(userId: number, noteId: number, m: { imageFileId?: string | null; sourceUrl?: string | null }): D1PreparedStatement {
+    return this.db.prepare(
+      `INSERT INTO user_note_media (user_id, note_id, image_file_id, source_url) VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id, note_id) DO UPDATE SET image_file_id = COALESCE(excluded.image_file_id, image_file_id), source_url = COALESCE(excluded.source_url, source_url)`,
+    ).bind(userId, noteId, m.imageFileId ?? null, m.sourceUrl ?? null);
+  }
+  async setUserMedia(userId: number, noteId: number, m: { imageFileId?: string | null; sourceUrl?: string | null }): Promise<void> {
+    await this.setUserMediaStmt(userId, noteId, m).run();
   }
   async setNoteAudio(noteId: number, fileId: string): Promise<void> {
     await this.db.prepare("UPDATE notes SET audio_file_id = ? WHERE id = ?").bind(fileId, noteId).run();
@@ -297,12 +309,12 @@ export class Repo {
     return { reviewsToday: r!.reviews_today!, learnedToday: r!.learned_today!, learned: r!.learned_n!, known: r!.known_n!, learning: r!.learning_n!, new: r!.new_n! };
   }
   async getCard(userId: number, cardId: number): Promise<CardRow | null> {
-    const r = await this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.id = ? AND c.user_id = ?`)
+    const r = await this.db.prepare(`SELECT ${CARD_COLS} ${CARD_FROM} WHERE c.id = ? AND c.user_id = ?`)
       .bind(cardId, userId).first<Record<string, unknown>>();
     return r ? rowToCard(r) : null;
   }
   async getCardByNote(userId: number, noteId: number, direction: Direction): Promise<CardRow | null> {
-    const r = await this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ? AND c.note_id = ? AND c.direction = ?`)
+    const r = await this.db.prepare(`SELECT ${CARD_COLS} ${CARD_FROM} WHERE c.user_id = ? AND c.note_id = ? AND c.direction = ?`)
       .bind(userId, noteId, direction).first<Record<string, unknown>>();
     return r ? rowToCard(r) : null;
   }
@@ -319,13 +331,14 @@ export class Repo {
       ? `((n.id + ${Math.trunc(userId)} * 977) * 2654435761) % 4294967296, d.value`
       : "n.deck_id, n.id, d.value";
     const [learning, review, fresh, counts] = await this.db.batch<Record<string, unknown>>([
-      this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
+      this.db.prepare(`SELECT ${CARD_COLS} ${CARD_FROM}
         WHERE c.user_id = ? AND c.state IN ('learning','relearning') AND ${inDirs} AND ${inDecks} ORDER BY c.due LIMIT ?`).bind(userId, dirs, userId, lim),
-      this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
+      this.db.prepare(`SELECT ${CARD_COLS} ${CARD_FROM}
         WHERE c.user_id = ? AND c.state = 'review' AND c.due < ? AND ${inDirs} AND ${notBuried} AND ${inDecks} ORDER BY c.due LIMIT ?`)
         .bind(userId, w.dayEndMs, dirs, w.today, userId, lim),
-      this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS} FROM notes n JOIN json_each(?) d
-        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY ${newOrderBy} LIMIT ?`).bind(dirs, userId, userId, w.today, lim),
+      this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS_M} FROM notes n JOIN json_each(?) d
+        LEFT JOIN user_note_media m ON m.note_id = n.id AND m.user_id = ?
+        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY ${newOrderBy} LIMIT ?`).bind(dirs, userId, userId, userId, w.today, lim),
       this.db.prepare(`SELECT
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state IN ('learning','relearning') AND c.direction IN (SELECT value FROM json_each(?2)) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS learning,
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,

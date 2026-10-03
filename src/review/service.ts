@@ -117,8 +117,14 @@ export class ReviewService {
       this.repo.markUndoneStmt(log.id),
       this.repo.updateUserStmt(user.id, { streak: log.streakBefore, lastStudyDay: log.lastStudyDayBefore }),
     ]);
-    const card = await this.repo.getCard(user.id, log.cardId);
-    if (!card) return { kind: "noundo" };
+    const screen = await this.cardScreen(user, log.cardId);
+    return screen ?? { kind: "noundo" };
+  }
+
+  /** The screen for one specific card (after undo, or when its picture changed). */
+  async cardScreen(user: User, cardId: number): Promise<Screen | null> {
+    const card = await this.repo.getCard(user.id, cardId);
+    if (!card) return null;
     const pv = preview(card.mem, this.now, user.retention);
     const intervals = {} as Record<Rating, string>;
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);

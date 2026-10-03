@@ -13,11 +13,11 @@ async function api(method: string, body: unknown) {
 }
 
 const ru = [
-  ["learn", "Повторять слова"], ["decks", "Колоды"], ["gen", "AI-колода по теме"], ["stats", "Прогресс"],
+  ["learn", "Повторять слова"], ["add", "➕ Добавить своё слово"], ["decks", "Колоды"], ["gen", "AI-колода по теме"], ["stats", "Прогресс"],
   ["settings", "Настройки"], ["undo", "Отменить оценку"], ["help", "Помощь"],
 ];
 const en = [
-  ["learn", "Review words"], ["decks", "Decks"], ["gen", "AI deck by topic"], ["stats", "Progress"],
+  ["learn", "Review words"], ["add", "➕ Add your own word"], ["decks", "Decks"], ["gen", "AI deck by topic"], ["stats", "Progress"],
   ["settings", "Settings"], ["undo", "Undo last rating"], ["help", "Help"],
 ];
 const cmds = (l: string[][]) => l.map(([command, description]) => ({ command, description }));

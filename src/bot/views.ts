@@ -8,7 +8,7 @@ export interface Rendered { text: string; keyboard: Keyboard; /** Telegram file_
 
 import type { CardView, Counts, DaySummary, Feedback } from "../review/service";
 export type { CardView, Counts, DaySummary, Feedback };
-export interface PreviewItem { word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string; sourceUrl: string | null }
+export interface PreviewItem { word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string; sourceUrl: string | null; imageFileId?: string | null }
 
 export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const btn = (text: string, data: string, style?: Button["style"]): Button => (style ? { text, callback_data: data, style } : { text, callback_data: data });
@@ -100,10 +100,11 @@ export function renderAddPreview(items: PreviewItem[], previewId: number, lang: 
     const meta = [i.ipa ? esc(i.ipa) : "", i.pos ? `<i>${esc(i.pos)}</i>` : ""].filter(Boolean).join(" · ");
     if (meta) text += `\n${meta}`;
     text += `\n\n<b>${esc(i.translation)}</b>`;
-    if (i.exampleEn || i.exampleRu) text += `<blockquote><i>${esc(i.exampleEn)}</i>\n${esc(i.exampleRu)}</blockquote>`;
+    if (i.exampleEn || i.exampleRu) text += `<blockquote>${[i.exampleEn ? `<i>${esc(i.exampleEn)}</i>` : "", esc(i.exampleRu)].filter(Boolean).join("\n")}</blockquote>`;
     if (i.sourceUrl) text += `\n🔗 ${esc(hostOf(i.sourceUrl))}`;
+    if (i.imageFileId) text += `\n${t.withPicture}`;
     return { text, keyboard: [[btn(t.add, `add:ok:${previewId}`, "primary"), btn(t.edit, `add:edit:${previewId}`), btn(t.cancel, `add:no:${previewId}`)]] };
   }
-  const text = [t.foundN(items.length), ...items.map((i) => `• <b>${esc(i.word)}</b> — ${esc(i.translation)}${i.sourceUrl ? " 🔗" : ""}`)].join("\n");
+  const text = [t.foundN(items.length), ...items.map((i) => `• <b>${esc(i.word)}</b> — ${esc(i.translation)}${i.sourceUrl ? " 🔗" : ""}${i.imageFileId ? " 🖼" : ""}`)].join("\n");
   return { text, keyboard: [[btn(t.addAll(items.length), `add:ok:${previewId}`, "primary"), btn(t.cancel, `add:no:${previewId}`)]] };
 }

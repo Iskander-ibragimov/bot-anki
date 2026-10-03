@@ -65,4 +65,15 @@ describe("parseWordsAndLinks", () => {
     const r = parseWordsAndLinks(t, []);
     expect(r.items).toHaveLength(20);
   });
+
+  it("'word — перевод' lines carry the user's own translation", () => {
+    expect(parseWordsAndLinks("serendipity — счастливая случайность", []).items).toEqual([{ word: "serendipity", url: null, translation: "счастливая случайность" }]);
+    expect(parseWordsAndLinks("cozy - уютный https://x.com/a", []).items).toEqual([{ word: "cozy", url: "https://x.com/a", translation: "уютный" }]);
+    expect(parseWordsAndLinks("thrive = процветать\nlong time no see – сто лет не виделись", []).items).toEqual([
+      { word: "thrive", url: null, translation: "процветать" }, { word: "long time no see", url: null, translation: "сто лет не виделись" },
+    ]);
+  });
+  it("hyphenated words and english-only lines are not split", () => {
+    expect(parseWordsAndLinks("well-known\nstate - of the art", []).items).toEqual([{ word: "well-known", url: null }, { word: "state - of the art", url: null }]);
+  });
 });

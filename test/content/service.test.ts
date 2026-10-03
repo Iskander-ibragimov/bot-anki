@@ -90,6 +90,8 @@ describe("content service", () => {
     const r = await svc.prepareAdd(user, " Borrow  https://x.com/v", []);
     expect(r).toMatchObject({ kind: "duplicates-only", duplicates: [{ word: "Borrow", deckTitle: "A2 · Базовый", linkAdded: true }] });
     expect((await repo.findNoteForUser(user.id, "borrow"))!.sourceUrl).toBe("https://x.com/v");
+    const shared = await env.DB.prepare("SELECT source_url FROM notes WHERE word_key = 'borrow'").first<{ source_url: string | null }>();
+    expect(shared!.source_url).toBeNull();
     const notes = await env.DB.prepare("SELECT COUNT(*) AS n FROM notes").first<{ n: number }>();
     expect(notes!.n).toBe(1);
   });
@@ -198,5 +200,39 @@ describe("content service", () => {
     const r = await service(repo, T, "fail").generateDeck(user, "space", 10);
     expect(r.kind).toBe("failed");
     expect((await repo.getUser(user.id))!.gensCount).toBe(0);
+  });
+
+  it("a line with the user's own translation needs no AI", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const r = await service(repo, T, "fail").prepareAdd(user, "serendipity — счастливая случайность", []);
+    if (r.kind !== "preview") throw new Error(r.kind);
+    expect(r.items[0]).toMatchObject({ word: "serendipity", translation: "счастливая случайность", ipa: "/ˌsɛɹənˈdɪpɪti/", exampleEn: "Finding that book was pure serendipity.", exampleRu: "" });
+    expect(r.manual).toEqual([]);
+  });
+
+  it("a picture sent with a new word is stored for that user's card", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1, patch: { newPerDay: 20 } });
+    const svc = service(repo, T, [card("cozy", "уютный")]);
+    const r = await svc.prepareAdd(user, "cozy", [], { imageFileId: "IMG1" });
+    if (r.kind !== "preview") throw new Error(r.kind);
+    expect(r.items[0]!.imageFileId).toBe("IMG1");
+    await svc.confirmAdd(user, r.previewId);
+    expect((await repo.findNoteForUser(user.id, "cozy"))!.imageFileId).toBe("IMG1");
+    const c = await repo.candidateCards(user.id, T, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions: ["en_ru"] });
+    expect(c.newNotes.find((n) => n.word === "cozy")!.imageFileId).toBe("IMG1");
+  });
+
+  it("a picture for a shared catalog word is visible only to the user who attached it", async () => {
+    const a = await seedUser(env.DB, { now: T, words: 1 });
+    const svc = service(a.repo, T, []);
+    const r = await svc.prepareAdd(a.user, "borrow", [], { imageFileId: "MINE" });
+    expect(r).toMatchObject({ kind: "duplicates-only", duplicates: [{ word: "borrow", imageAdded: true, linkAdded: false }] });
+    const otherId = await a.repo.insertUser({ tgId: 77, chatId: 77, lang: "ru", now: T });
+    await a.repo.subscribe(otherId, a.deckId, T);
+    expect((await a.repo.findNoteForUser(a.user.id, "borrow"))!.imageFileId).toBe("MINE");
+    expect((await a.repo.findNoteForUser(otherId, "borrow"))!.imageFileId).toBeNull();
+    await a.repo.setUserMedia(a.user.id, a.noteIds[0]!, { imageFileId: "NEWER" });
+    const cardId = await a.repo.ensureNewCard(a.user.id, a.noteIds[0]!, "en_ru", { state: "new", step: null, stability: null, difficulty: null, due: T, lastReview: null, scheduledDays: 0, reps: 0, lapses: 0 });
+    expect((await a.repo.getCard(a.user.id, cardId))!.imageFileId).toBe("NEWER");
   });
 });

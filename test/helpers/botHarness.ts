@@ -39,9 +39,16 @@ export function harness(db: D1Database, opts: { now: number; fetch?: typeof fetc
       const ents = entities ?? (cmd ? [{ type: "bot_command", offset: 0, length: cmd[0].length }] : undefined);
       return send({ update_id: uid++, message: { message_id: 500 + uid, date: 0, chat, from, text, ...(ents ? { entities: ents } : {}) } } as Update);
     },
+    photo: (fileId: string, caption?: string, replyTo?: number) =>
+      send({ update_id: uid++, message: {
+        message_id: 500 + uid, date: 0, chat, from,
+        photo: [{ file_id: `${fileId}-small`, file_unique_id: "s", width: 90, height: 90 }, { file_id: fileId, file_unique_id: "b", width: 800, height: 800 }],
+        ...(caption ? { caption } : {}),
+        ...(replyTo ? { reply_to_message: { message_id: replyTo, date: 0, chat, text: "x" } } : {}),
+      } } as Update),
     press: (data: string, messageId = 100) =>
       send({ update_id: uid++, callback_query: { id: `cb${uid}`, from, chat_instance: "x", data, message: { message_id: messageId, date: 0, chat, text: "x" } } } as Update),
-    lastText: () => { const c = [...tg.calls].reverse().find((x) => x.method === "sendMessage" || x.method === "editMessageText"); return String(c?.payload.text ?? ""); },
-    lastMarkup: () => { const c = [...tg.calls].reverse().find((x) => x.method === "sendMessage" || x.method === "editMessageText"); return (c?.payload.reply_markup ?? {}) as { inline_keyboard?: { text: string; callback_data: string }[][] }; },
+    lastText: () => { const c = [...tg.calls].reverse().find((x) => x.method === "sendMessage" || x.method === "editMessageText" || x.method === "sendPhoto"); return String(c?.payload.text ?? c?.payload.caption ?? ""); },
+    lastMarkup: () => { const c = [...tg.calls].reverse().find((x) => x.method === "sendMessage" || x.method === "editMessageText" || x.method === "sendPhoto"); return (c?.payload.reply_markup ?? {}) as { inline_keyboard?: { text: string; callback_data: string }[][] }; },
   };
 }

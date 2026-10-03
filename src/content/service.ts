@@ -8,8 +8,11 @@ import { DECK_SYSTEM, type LlmClient, LlmUnavailable, WORDS_SYSTEM, type WordCar
 export interface CardDraft {
   word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string;
   sourceUrl: string | null; audioUrl: string | null;
+  /** Telegram file_id of the picture the user sent with the word. */
+  imageFileId?: string | null;
 }
-export interface Duplicate { word: string; deckTitle: string; linkAdded: boolean }
+export interface Duplicate { word: string; deckTitle: string; linkAdded: boolean; imageAdded: boolean }
+export interface AddOptions { imageFileId?: string }
 export type AddResult =
   | { kind: "ask-words"; url: string }
   | { kind: "empty" }
@@ -19,7 +22,7 @@ export type AddResult =
 export type GenResult = { kind: "limit" } | { kind: "failed" } | { kind: "preview"; previewId: number; topic: string; items: CardDraft[] };
 
 interface Deps { dict: DictionaryClient; llm: LlmClient }
-interface PendingManual { word: string; url: string | null; ipa: string | null; pos: string; audioUrl: string | null }
+interface PendingManual { word: string; url: string | null; ipa: string | null; pos: string; audioUrl: string | null; imageFileId?: string | null }
 interface PendingPreviewEdit { previewId: number }
 
 const PENDING_URL_MS = 10 * 60_000;
@@ -37,49 +40,59 @@ export class ContentService {
   }
 
   /** Parses a message with words and links, skips duplicates, and builds a preview via dictionary + LLM. */
-  async prepareAdd(user: User, text: string, entities: Entity[]): Promise<AddResult> {
+  async prepareAdd(user: User, text: string, entities: Entity[], opts: AddOptions = {}): Promise<AddResult> {
     const parsed = parseWordsAndLinks(text, entities);
     if (!parsed.items.length) {
       if (!parsed.orphanUrl) return { kind: "empty" };
       await this.repo.updateUser(user.id, { pendingUrl: parsed.orphanUrl, pendingUrlAt: this.now });
       return { kind: "ask-words", url: parsed.orphanUrl };
     }
+    const image = opts.imageFileId ?? null;
     const items = parsed.items.map((i) => ({ ...i }));
     if (user.pendingUrl && user.pendingUrlAt != null) {
       if (this.now - user.pendingUrlAt <= PENDING_URL_MS && items.every((i) => !i.url)) for (const i of items) i.url = user.pendingUrl;
       await this.repo.updateUser(user.id, { pendingUrl: null, pendingUrlAt: null });
     }
 
+    // Words the user already learns: no new card, but a new link or picture is attached to their copy only.
     const duplicates: Duplicate[] = [];
     const fresh: typeof items = [];
+    const media: D1PreparedStatement[] = [];
     const known = await this.repo.findNotesForUser(user.id, items.map((i) => i.word));
     for (const it of items) {
       const hit = known.get(wordKey(it.word));
       if (!hit) { fresh.push(it); continue; }
       const linkAdded = !!it.url && !hit.sourceUrl;
-      if (linkAdded) await this.repo.setNoteSourceUrl(hit.id, it.url!);
-      duplicates.push({ word: it.word, deckTitle: user.lang === "ru" ? hit.deckTitleRu : hit.deckTitleEn, linkAdded });
+      if (linkAdded || image) media.push(this.repo.setUserMediaStmt(user.id, hit.id, { sourceUrl: linkAdded ? it.url : null, imageFileId: image }));
+      duplicates.push({ word: it.word, deckTitle: user.lang === "ru" ? hit.deckTitleRu : hit.deckTitleEn, linkAdded, imageAdded: !!image });
     }
+    if (media.length) await this.repo.batch(media);
     if (!fresh.length) return { kind: "duplicates-only", duplicates };
 
     const deadline = Date.now() + this.deadlineMs;
     const dict = await Promise.all(fresh.map((i) => this.deps.dict.lookup(i.word, Math.min(5000, (deadline - Date.now()) / 3))));
+    const needAi = fresh.filter((i) => !i.translation);
     let ai: WordCard[] = [];
-    try {
-      ai = await completeCards(this.deps.llm, WORDS_SYSTEM, `Words:\n${fresh.map((i) => i.word).join("\n")}`, deadline);
-    } catch (e) {
-      if (!(e instanceof LlmUnavailable)) throw e;
+    if (needAi.length) {
+      try {
+        ai = await completeCards(this.deps.llm, WORDS_SYSTEM, `Words:\n${needAi.map((i) => i.word).join("\n")}`, deadline);
+      } catch (e) {
+        if (!(e instanceof LlmUnavailable)) throw e;
+      }
     }
     const drafts: CardDraft[] = [];
     const manual: PendingManual[] = [];
     fresh.forEach((it, idx) => {
       const d = dict[idx];
+      const base = { word: it.word, sourceUrl: it.url, audioUrl: d?.audioUrl ?? null, imageFileId: image };
+      if (it.translation) {
+        // The user's own translation: no AI; the dictionary only adds transcription and an example.
+        drafts.push({ ...base, ipa: d?.ipa ?? null, pos: d?.pos ?? "", translation: it.translation, exampleEn: d?.exampleEn ?? "", exampleRu: "" });
+        return;
+      }
       const a = ai.find((c) => c.word.toLowerCase() === it.word.toLowerCase());
-      if (!a) { manual.push({ word: it.word, url: it.url, ipa: d?.ipa ?? null, pos: d?.pos ?? "", audioUrl: d?.audioUrl ?? null }); return; }
-      drafts.push({
-        word: it.word, ipa: d?.ipa ?? a.ipa ?? null, pos: d?.pos || a.pos, translation: a.translation,
-        exampleEn: a.exampleEn, exampleRu: a.exampleRu, sourceUrl: it.url, audioUrl: d?.audioUrl ?? null,
-      });
+      if (!a) { manual.push({ word: it.word, url: it.url, ipa: d?.ipa ?? null, pos: d?.pos ?? "", audioUrl: d?.audioUrl ?? null, imageFileId: image }); return; }
+      drafts.push({ ...base, ipa: d?.ipa ?? a.ipa ?? null, pos: d?.pos || a.pos, translation: a.translation, exampleEn: a.exampleEn, exampleRu: a.exampleRu });
     });
     if (!drafts.length) {
       const first = manual[0]!;
@@ -96,7 +109,8 @@ export class ContentService {
     if (!pending?.manual) return null;
     const m = pending.manual;
     const deckId = await this.repo.customDeck(user.id, this.now);
-    await this.repo.insertNotes(deckId, [{ word: m.word, ipa: m.ipa, pos: m.pos, translation: translation.trim(), exampleEn: "", exampleRu: "", sourceUrl: m.url, audioUrl: m.audioUrl }]);
+    const [noteId] = await this.repo.insertNotes(deckId, [{ word: m.word, ipa: m.ipa, pos: m.pos, translation: translation.trim(), exampleEn: "", exampleRu: "", sourceUrl: m.url, audioUrl: m.audioUrl }]);
+    if (m.imageFileId && noteId) await this.repo.setUserMedia(user.id, noteId, { imageFileId: m.imageFileId });
     await this.repo.updateUser(user.id, { pendingEdit: null });
     return m.word;
   }
@@ -134,9 +148,16 @@ export class ContentService {
     const deckId = await this.repo.customDeck(user.id, this.now);
     const ids = await this.repo.insertNotes(deckId, items.map(toNote));
     await this.repo.deletePreview(user.id, previewId);
+    const pictures = items.flatMap((d, i) => (d.imageFileId ? [this.repo.setUserMediaStmt(user.id, ids[i]!, { imageFileId: d.imageFileId })] : []));
+    if (pictures.length) await this.repo.batch(pictures);
     const audio = items.flatMap((d, i) => (d.audioUrl ? [{ noteId: ids[i]!, audioUrl: d.audioUrl }] : []));
     for (const a of audio) await enqueue(this.repo.db, "voice", a, this.now, `voice:${a.noteId}`);
     return { words: items.map((i) => i.word), audio };
+  }
+
+  /** Attaches the user's picture to a word they already have (e.g. the card on screen). */
+  async attachImage(user: User, noteId: number, imageFileId: string): Promise<void> {
+    await this.repo.setUserMedia(user.id, noteId, { imageFileId });
   }
 
   async cancel(user: User, previewId: number): Promise<void> { await this.repo.deletePreview(user.id, previewId); }
