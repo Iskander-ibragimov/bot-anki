@@ -122,6 +122,30 @@ describe("bot handlers", () => {
     expect(h2.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe("Озвучка сейчас недоступна");
   });
 
+  it("a card comes without sound: voice is sent only on the speaker button, or when autoplay is switched on in settings", async () => {
+    await seedCatalog(env.DB);
+    const h = harness(env.DB, { now: T, synth: async () => new Uint8Array([1, 2, 3]) });
+    await h.text("/start");
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    expect(u.autoplay).toBe(false);
+    await repo.updateUser(u.id, { onboardingStep: null });
+    await repo.subscribe(u.id, (await repo.getDeckBySlug("a1"))!.id, T);
+    await h.text("/learn");
+    const buttons = callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never);
+    await h.press(buttons[2]!, h.tg.lastMessageId()); // grade: the next card is shown
+    expect(h.tg.of("sendVoice")).toHaveLength(0);
+    const speaker = callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never).find((c) => c.startsWith("v:"))!;
+    await h.press(speaker, h.tg.lastMessageId());
+    expect(h.tg.of("sendVoice")).toHaveLength(1);
+
+    await h.text("/settings");
+    await h.press("set:auto", h.tg.lastMessageId());
+    expect(JSON.stringify(h.lastMarkup())).toContain("Автоозвучка: вкл");
+    await h.text("/learn");
+    expect(h.tg.of("sendVoice")).toHaveLength(2);
+  });
+
   it("the picture button on a card asks for a photo, shows the card with it, and can remove it again", async () => {
     const { h, repo, u, cardMsg } = await startSession();
     const picBtn = callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never).find((c) => c.startsWith("pic:"))!;
