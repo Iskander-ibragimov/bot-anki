@@ -60,8 +60,14 @@ export async function completeCards(llm: LlmClient, system: string, user: string
 export const WORDS_SYSTEM =
   "You build flashcards for Russian speakers learning English. Reply with JSON only: " +
   '{"cards":[{"word","ipa","pos","translation","exampleEn","exampleRu"}]}. ' +
-  "translation: short Russian translation (1–3 variants). exampleEn: one natural everyday English sentence with the word. " +
+  "translation: short Russian translation (1–3 variants); for a phrase or idiom give its natural Russian equivalent. exampleEn: one natural everyday English sentence with the word or phrase. " +
   "exampleRu: its Russian translation. ipa: British IPA in slashes or null. pos: noun/verb/adj/adv/phrase. Keep the words exactly as given.";
+
+export const RU_SYSTEM =
+  "You build one flashcard for a Russian speaker learning English. The user gives a Russian word or phrase. Reply with JSON only: " +
+  '{"cards":[{"word","ipa","pos","translation","exampleEn","exampleRu"}]} with exactly one card. ' +
+  "word: the most natural English equivalent (a word or a short phrase). translation: the Russian text as given. " +
+  "exampleEn: one natural everyday English sentence with it. exampleRu: its Russian translation. ipa: British IPA in slashes or null.";
 
 export const DECK_SYSTEM =
   "You create themed English vocabulary decks for Russian speakers. Reply with JSON only: " +

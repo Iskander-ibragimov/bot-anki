@@ -4,7 +4,7 @@ import { isAdmin, adminStatsText, importDeckCsv } from "../admin/service";
 import { type Synth, playVoice } from "../content/audio";
 import { DictionaryClient } from "../content/dictionary";
 import { LlmClient } from "../content/llm";
-import { ContentService } from "../content/service";
+import { type AutoResult, ContentService, type EntryResult } from "../content/service";
 import type { Repo, User } from "../db/repo";
 import { remaining } from "../entitlements/service";
 import type { Config } from "../env";
@@ -15,7 +15,7 @@ import { cumulative } from "../stats/service";
 import { type TgApi, TgUpload } from "../tg/client";
 import { REMIND_TIMES, RETENTIONS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
 import { deckTitle, learnKeyboard, renderDecks, renderGenPreview, renderOnboarding, renderSettings, renderStats } from "./screens";
-import { type Keyboard, type Rendered, esc, hostOf, renderAddPreview, renderCard, renderDone } from "./views";
+import { type Keyboard, type Rendered, esc, hostOf, renderAddPreview, renderAwait, renderCard, renderDone, renderMyWords } from "./views";
 
 export interface BotDeps {
   config: Config;
@@ -212,7 +212,61 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await toast(ctx);
   });
 
-  /* custom words */
+  /* own cards: one card per message, English and Russian in any order */
+  type RawEntity = { type: string; offset: number; length: number; url?: string };
+  const toEntities = (list: readonly RawEntity[] | undefined, shift = 0) =>
+    (list ?? []).filter((e) => e.offset >= shift).map((e) => ({ type: e.type, offset: e.offset - shift, length: e.length, url: e.url }));
+
+  const renderEntry = (res: EntryResult | AutoResult, lang: User["lang"]): Rendered => {
+    const t = dict(lang);
+    switch (res.kind) {
+      case "empty": return { text: t.helpAdd, keyboard: [] };
+      case "ask-words": return { text: t.askWords(esc(hostOf(res.url))), keyboard: [] };
+      case "too-many": return { text: t.oneAtATime, keyboard: [] };
+      case "unclear": return { text: t.unclearEntry, keyboard: [] };
+      case "duplicate": {
+        const d = res.duplicate;
+        return { text: t.dupLine(esc(d.word), esc(d.deckTitle), d.linkAdded, d.imageAdded), keyboard: learnKeyboard(lang) };
+      }
+      case "await": return renderAwait(res.side, res.text, lang);
+      case "failed": return { text: t.autoFailed(esc(res.text), res.side === "en"), keyboard: renderAwait(res.side, res.text, lang).keyboard };
+      case "nothing": return { text: t.awaitGone, keyboard: [] };
+      case "preview": return renderAddPreview(res.item, res.previewId, lang);
+    }
+  };
+
+  const addFlow = async (ctx: Ctx, text: string, entities: ReturnType<typeof toEntities>, imageFileId?: string) => {
+    const res = await content().addEntry(ctx.user, text, entities, imageFileId ? { imageFileId } : {});
+    await send(ctx, renderEntry(res, ctx.user.lang));
+  };
+
+  /** "Translate automatically" / "don't add" under the request for the other side. */
+  c.callbackQuery(/^tr:(auto|no)$/, async (ctx) => {
+    const user = ctx.user;
+    const t = dict(user.lang);
+    const svc = content();
+    if (ctx.match[1] === "no") {
+      await svc.cancelAwait(user);
+      await editOrSend(ctx, clickedId(ctx), { text: t.notAdded, keyboard: [] });
+      return toast(ctx);
+    }
+    if (svc.pendingKind(user) !== "await") {
+      await editOrSend(ctx, clickedId(ctx), { text: t.awaitGone, keyboard: [] });
+      return toast(ctx);
+    }
+    const shown = await editOrSend(ctx, clickedId(ctx), { text: t.translating, keyboard: [] });
+    await toast(ctx);
+    // The AI call is slow: it runs after the webhook has answered.
+    deps.waitUntil((async () => {
+      try {
+        await editOrSend(ctx, shown, renderEntry(await svc.autoTranslate(user), user.lang));
+      } catch (e) {
+        console.error("auto translate failed", e);
+        await editOrSend(ctx, shown, { text: isD1Limit(e) ? t.maintenance : t.genFailed, keyboard: [] }).catch(() => undefined);
+      }
+    })());
+  });
+
   c.callbackQuery(/^add:(ok|edit|no):(\d+)$/, async (ctx) => {
     const t = dict(ctx.user.lang);
     const id = Number(ctx.match[2]);
@@ -224,45 +278,17 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       await ctx.reply(items ? t.editAsk(esc(items[0]!.word)) : t.previewExpired);
       return;
     }
-    try {
-      const r = await svc.confirmAdd(ctx.user, id);
-      await editOrSend(ctx, clickedId(ctx), { text: t.added(r.words.map((w) => `<b>${esc(w)}</b>`).join(", ")), keyboard: learnKeyboard(ctx.user.lang) });
-    } catch { await editOrSend(ctx, clickedId(ctx), { text: t.previewExpired, keyboard: [] }); }
+    let saved: { word: string; total: number } | null = null;
+    try { saved = await svc.confirmAdd(ctx.user, id); } catch { /* the preview is gone: pressed twice or expired */ }
+    await editOrSend(ctx, clickedId(ctx), saved
+      ? { text: t.addedOne(esc(saved.word), saved.total), keyboard: [[{ text: t.learnBtn, callback_data: "learn", style: "primary" }], [{ text: t.moreBtn, callback_data: "help:add" }, { text: t.myWordsBtn, callback_data: "mywords" }]] }
+      : { text: t.previewExpired, keyboard: [] });
     await toast(ctx);
   });
 
-  type RawEntity = { type: string; offset: number; length: number; url?: string };
-  const toEntities = (list: readonly RawEntity[] | undefined, shift = 0) =>
-    (list ?? []).filter((e) => e.offset >= shift).map((e) => ({ type: e.type, offset: e.offset - shift, length: e.length, url: e.url }));
-
-  /** Words (with optional links and a picture) → preview message. Slow lookups run after the webhook has answered. */
-  const addFlow = async (ctx: Ctx, text: string, entities: ReturnType<typeof toEntities>, imageFileId?: string) => {
-    const t = dict(ctx.user.lang);
-    const svc = content();
-    const m = await ctx.reply(t.searching);
-    const user = ctx.user;
-    deps.waitUntil((async () => {
-      try {
-        const res = await svc.prepareAdd(user, text, entities, imageFileId ? { imageFileId } : {});
-        const dups = "duplicates" in res ? res.duplicates.map((d) => t.dupLine(esc(d.word), esc(d.deckTitle), d.linkAdded, d.imageAdded)) : [];
-        const prefix = dups.length ? dups.join("\n") + "\n\n" : "";
-        let r: Rendered;
-        if (res.kind === "ask-words") r = { text: t.askWords(esc(hostOf(res.url))), keyboard: [] };
-        else if (res.kind === "empty") r = { text: t.helpAdd, keyboard: [] };
-        else if (res.kind === "duplicates-only") r = { text: dups.join("\n"), keyboard: learnKeyboard(user.lang) };
-        else if (res.kind === "manual") r = { text: prefix + t.manualAsk(esc(res.word)) + (res.others.length ? "\n\n" + t.notTranslated(res.others.map(esc).join(", ")) : ""), keyboard: [] };
-        else {
-          const p = renderAddPreview(res.items, res.previewId, user.lang);
-          const tail = res.manual.length ? "\n\n" + t.notTranslated(res.manual.map(esc).join(", ")) : "";
-          r = { text: prefix + p.text + tail, keyboard: p.keyboard };
-        }
-        await editOrSend(ctx, m.message_id, r);
-      } catch (e) {
-        console.error("add words failed", e);
-        await editOrSend(ctx, m.message_id, { text: isD1Limit(e) ? t.maintenance : t.genFailed, keyboard: [] }).catch(() => undefined);
-      }
-    })());
-  };
+  const showMyWords = async (ctx: Ctx) => send(ctx, renderMyWords(await content().myWords(ctx.user), ctx.user.lang));
+  c.command("mywords", async (ctx) => { if (await ready(ctx)) await showMyWords(ctx); });
+  c.callbackQuery("mywords", async (ctx) => { await toast(ctx); await showMyWords(ctx); });
 
   /* settings, stats, help */
   c.command("settings", async (ctx) => { if (await ready(ctx)) await send(ctx, renderSettings(ctx.user)); });
@@ -309,7 +335,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await addFlow(ctx, arg, toEntities(ctx.message?.entities, full.indexOf(arg)));
   });
 
-  /* a picture: with a caption it is a new word; without one it goes to the card on screen */
+  /* a picture: with a caption it is a new card; without one it goes to the card on screen */
   c.on("message:photo", async (ctx) => {
     const t = dict(ctx.user.lang);
     if (ctx.user.onboardingStep) { await ctx.reply(t.chooseAbove); return; }
@@ -326,7 +352,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (screen) await show(ctx, screen, session.messageId ?? undefined);
   });
 
-  /* free text: onboarding answers, manual translations, custom words */
+  /* free text: onboarding answers, a corrected translation, own cards */
   c.on("message:text", async (ctx) => {
     const text = ctx.message.text;
     const t = dict(ctx.user.lang);
@@ -337,15 +363,10 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       return;
     }
     const svc = content();
-    const pending = svc.pendingKind(ctx.user);
-    if (pending === "manual") {
-      const word = await svc.completeManual(ctx.user, text);
-      if (word) { await send(ctx, { text: t.added(`<b>${esc(word)}</b>`), keyboard: learnKeyboard(ctx.user.lang) }); return; }
-    }
-    if (pending === "preview") {
+    if (svc.pendingKind(ctx.user) === "preview") {
       try {
         const r = await svc.editPreviewTranslation(ctx.user, text);
-        await send(ctx, renderAddPreview(r.items, r.previewId, ctx.user.lang));
+        await send(ctx, renderAddPreview(r.items[0]!, r.previewId, ctx.user.lang));
       } catch { await ctx.reply(t.previewExpired); }
       return;
     }

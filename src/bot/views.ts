@@ -98,19 +98,34 @@ export function renderDone(s: DaySummary, lang: Lang): Rendered {
   return { text: lines.join("\n"), keyboard: [[btn(t.addWords, "help:add"), btn(t.decksBtn, "decks")]] };
 }
 
-export function renderAddPreview(items: PreviewItem[], previewId: number, lang: Lang): Rendered {
+/** The card as it will be saved, with "add / edit / cancel". */
+export function renderAddPreview(i: PreviewItem, previewId: number, lang: Lang): Rendered {
   const t = dict(lang);
-  if (items.length === 1) {
-    const i = items[0]!;
-    let text = `<b>${esc(i.word)}</b>`;
-    const meta = [i.ipa ? esc(i.ipa) : "", i.pos ? `<i>${esc(i.pos)}</i>` : ""].filter(Boolean).join(" · ");
-    if (meta) text += `\n${meta}`;
-    text += `\n\n<b>${esc(i.translation)}</b>`;
-    if (i.exampleEn || i.exampleRu) text += `<blockquote>${[i.exampleEn ? `<i>${esc(i.exampleEn)}</i>` : "", esc(i.exampleRu)].filter(Boolean).join("\n")}</blockquote>`;
-    if (i.sourceUrl) text += `\n🔗 ${esc(hostOf(i.sourceUrl))}`;
-    if (i.imageFileId) text += `\n${t.withPicture}`;
-    return { text, keyboard: [[btn(t.add, `add:ok:${previewId}`, "primary"), btn(t.edit, `add:edit:${previewId}`), btn(t.cancel, `add:no:${previewId}`)]] };
-  }
-  const text = [t.foundN(items.length), ...items.map((i) => `• <b>${esc(i.word)}</b> — ${esc(i.translation)}${i.sourceUrl ? " 🔗" : ""}${i.imageFileId ? " 🖼" : ""}`)].join("\n");
-  return { text, keyboard: [[btn(t.addAll(items.length), `add:ok:${previewId}`, "primary"), btn(t.cancel, `add:no:${previewId}`)]] };
+  let text = `<b>${esc(i.word)}</b>`;
+  const meta = [i.ipa ? esc(i.ipa) : "", i.pos ? `<i>${esc(i.pos)}</i>` : ""].filter(Boolean).join(" · ");
+  if (meta) text += `\n${meta}`;
+  text += `\n\n<b>${esc(i.translation)}</b>`;
+  if (i.exampleEn || i.exampleRu) text += `<blockquote>${[i.exampleEn ? `<i>${esc(i.exampleEn)}</i>` : "", esc(i.exampleRu)].filter(Boolean).join("\n")}</blockquote>`;
+  if (i.sourceUrl) text += `\n🔗 ${esc(hostOf(i.sourceUrl))}`;
+  if (i.imageFileId) text += `\n${t.withPicture}`;
+  return { text, keyboard: [[btn(t.add, `add:ok:${previewId}`, "primary"), btn(t.edit, `add:edit:${previewId}`), btn(t.cancel, `add:no:${previewId}`)]] };
+}
+
+/** Only one language was sent: ask for the other one, or offer to translate. */
+export function renderAwait(side: "en" | "ru", text: string, lang: Lang): Rendered {
+  const t = dict(lang);
+  return {
+    text: side === "en" ? t.awaitRu(esc(text)) : t.awaitEn(esc(text)),
+    keyboard: [[btn(t.autoBtn, "tr:auto", "primary")], [btn(t.awaitCancelBtn, "tr:no")]],
+  };
+}
+
+/** The user's own dictionary. */
+export function renderMyWords(list: { total: number; items: { word: string; translation: string }[] }, lang: Lang): Rendered {
+  const t = dict(lang);
+  const more = [btn(t.moreBtn, "help:add")];
+  if (!list.total) return { text: t.myWordsEmpty, keyboard: [more] };
+  const lines = [t.myWordsTitle(list.total), "", ...list.items.map((i) => `• <b>${esc(i.word)}</b> — ${esc(i.translation)}`)];
+  if (list.total > list.items.length) lines.push("", t.myWordsLatest(list.items.length));
+  return { text: lines.join("\n"), keyboard: [[btn(t.learnBtn, "learn", "primary")], more] };
 }

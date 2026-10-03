@@ -335,7 +335,9 @@ export class Repo {
     const inDecks = "n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?)";
     // "random" is a fixed scatter (Knuth multiplicative hash of the note id, offset per user), stable between calls.
     const random = w.newOrder === "random";
-    const newOrderBy = random ? "((n.id + ? * 977) * 2654435761) % 4294967296, d.value" : "n.deck_id, n.id, d.value";
+    // The user's own cards (their dictionary and AI decks) are always studied before catalog words.
+    const ownFirst = "(SELECT dk.kind = 'catalog' FROM decks dk WHERE dk.id = n.deck_id)";
+    const newOrderBy = `${ownFirst}, ${random ? "((n.id + ? * 977) * 2654435761) % 4294967296, d.value" : "n.deck_id, n.id, d.value"}`;
     const [learning, review, fresh, counts] = await this.db.batch<Record<string, unknown>>([
       this.db.prepare(`SELECT ${CARD_COLS} ${CARD_FROM}
         WHERE c.user_id = ? AND c.state IN ('learning','relearning') AND ${inDirs} AND ${inDecks} ORDER BY c.due LIMIT ?`).bind(userId, dirs, userId, lim),
@@ -469,6 +471,16 @@ export class Repo {
     const id = await this.insertDeck({ slug: null, kind: "custom", titleRu: "Мои слова", titleEn: "My words", level: null, ownerId: userId });
     await this.subscribe(userId, id, now);
     return id;
+  }
+
+  /** The user's own dictionary ("My words"): total and the newest cards. */
+  async listCustomNotes(userId: number, limit: number): Promise<{ total: number; items: { word: string; translation: string }[] }> {
+    const own = "n.deck_id IN (SELECT id FROM decks WHERE owner_id = ? AND kind = 'custom')";
+    const [count, rows] = await this.db.batch<Record<string, unknown>>([
+      this.db.prepare(`SELECT COUNT(*) AS total FROM notes n WHERE ${own}`).bind(userId),
+      this.db.prepare(`SELECT n.word, n.translation FROM notes n WHERE ${own} ORDER BY n.id DESC LIMIT ?`).bind(userId, limit),
+    ]);
+    return { total: (count!.results[0]!.total as number) ?? 0, items: rows!.results.map((r) => ({ word: r.word as string, translation: r.translation as string })) };
   }
 
   /* usage */
