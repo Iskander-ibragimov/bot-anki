@@ -60,10 +60,13 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          GROQ_VISION_MODEL: ${{ vars.GROQ_VISION_MODEL }}
+          OPENROUTER_VISION_MODEL: ${{ vars.OPENROUTER_VISION_MODEL }}
         run: |
           PROVIDERS=$(npx tsx scripts/pick-models.ts)
-          jq -n --arg b "$BOT_TOKEN" --arg w "$WEBHOOK_SECRET" --arg a "$ADMIN_TG_ID" --arg p "$PROVIDERS" \
-            '{BOT_TOKEN:$b, WEBHOOK_SECRET:$w, ADMIN_TG_ID:$a, LLM_PROVIDERS:$p}' > secrets.json
+          VISION=$(npx tsx scripts/pick-models.ts vision || echo "[]")
+          jq -n --arg b "$BOT_TOKEN" --arg w "$WEBHOOK_SECRET" --arg a "$ADMIN_TG_ID" --arg p "$PROVIDERS" --arg v "${VISION:-[]}" \
+            '{BOT_TOKEN:$b, WEBHOOK_SECRET:$w, ADMIN_TG_ID:$a, LLM_PROVIDERS:$p, VISION_PROVIDERS:$v}' > secrets.json
           npx wrangler secret bulk secrets.json
           rm secrets.json
 
