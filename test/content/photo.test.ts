@@ -21,6 +21,8 @@ describe("text read from a picture", () => {
   it("takes the line out of a chatty answer and treats refusals as no text", () => {
     expect(cleanOcr('The subtitle reads: "...and not twist."')).toBe("...and not twist.");
     expect(cleanOcr("Subtitle: ...and not twist.")).toBe("...and not twist.");
+    expect(cleanOcr("<think>\nThe frame shows a bridge. The subtitle is at the bottom.\n</think>\n\n...and not twist.")).toBe("...and not twist.");
+    expect(cleanOcr("<think>Let me look at the picture, there is a")).toBeNull(); // cut off while still reasoning
     expect(cleanOcr('The subtitle reads: "...and not twist." Other text: theatre.example')).toBe("...and not twist.");
     expect(cleanOcr("The text in the image says “Leave now.”")).toBe("Leave now.");
     expect(cleanOcr("**...and not twist.**")).toBe("...and not twist.");

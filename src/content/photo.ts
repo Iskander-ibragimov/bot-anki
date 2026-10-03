@@ -15,7 +15,9 @@ const REFUSAL = [
 
 /** What a vision model answered → the English line on the picture, or null when there is none. */
 export function cleanOcr(raw: string): string | null {
-  let s = raw.replace(/’/g, "'").trim().split(/\n\s*\n/)[0]!; // a model's remarks come after a blank line
+  // reasoning models think aloud first; an unfinished thought means there is no answer
+  const answer = raw.replace(/<think>[\s\S]*?<\/think>/gi, " ").replace(/<think>[\s\S]*$/i, " ");
+  let s = answer.replace(/’/g, "'").trim().split(/\n\s*\n/)[0]!; // a model's remarks come after a blank line
   s = s.replace(/```[a-z]*\n?/gi, " ").replace(/\s+/g, " ").trim();
   s = s.replace(/^[*_`]+|[*_`]+$/g, "").trim();
   if (REFUSAL.some((re) => re.test(s))) return null;

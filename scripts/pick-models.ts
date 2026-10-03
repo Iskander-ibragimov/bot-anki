@@ -13,7 +13,7 @@ const GROQ = "https://api.groq.com/openai/v1";
 const OPENROUTER = "https://openrouter.ai/api/v1";
 const GROQ_PREF = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "moonshotai/kimi-k2-instruct", "llama-3.1-8b-instant"];
 const OR_PREF = ["meta-llama/llama-3.3-70b-instruct:free", "openai/gpt-oss-120b:free", "openai/gpt-oss-20b:free", "deepseek/deepseek-chat-v3.1:free", "qwen/qwen3-235b-a22b:free"];
-const GROQ_VISION_PREF = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct", "llama-3.2-90b-vision-preview", "llama-3.2-11b-vision-preview"];
+const GROQ_VISION_PREF = ["qwen/qwen3.8-27b", "meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct", "llama-3.2-90b-vision-preview", "llama-3.2-11b-vision-preview"];
 const OR_VISION_PREF = ["google/gemma-3-27b-it:free", "meta-llama/llama-4-maverick:free", "meta-llama/llama-4-scout:free", "mistralai/mistral-small-3.2-24b-instruct:free", "qwen/qwen2.5-vl-72b-instruct:free", "google/gemma-3-12b-it:free"];
 const MAX_TRIES = 4;
 
@@ -38,30 +38,42 @@ if (process.argv[2] === "vision") {
     [...new Set([...(override ? [override] : []), ...pref.filter((p) => ids.includes(p)), ...ids])].slice(0, MAX_TRIES);
   /** The sample frame says "...and not twist."; an answer with anything else in it would end up on the user's cards. */
   const exact = (read: string | null) => read !== null && read.toLowerCase().replace(/[^a-z]+/g, "") === "andnottwist";
+  /** fetch that remembers why the last call failed (status and the provider's own message; never the key). */
+  let why = "";
+  const probe: typeof fetch = async (input, init) => {
+    try {
+      const res = await fetch(input, init);
+      if (res.ok) { why = ""; return res; }
+      let message = "";
+      try { message = String(((await res.clone().json()) as { error?: { message?: unknown } }).error?.message ?? ""); } catch { /* not JSON */ }
+      why = `HTTP ${res.status} ${message.replace(/\s+/g, " ").slice(0, 140)}`.trim();
+      return res;
+    } catch (e) {
+      why = `no response (${(e as Error).name})`;
+      throw e;
+    }
+  };
+  const busy = () => /^HTTP (408|429|5\d\d)|^no response/.test(why);
   const firstWorking = async (name: string, baseUrl: string, apiKey: string, candidates: string[]) => {
-    let silent: string | undefined; // a model that gave no answer at all: possibly just busy right now
+    let later: string | undefined; // a model that was only busy: rate limits must not switch the feature off until the next deploy
+    const tried: string[] = [];
     for (const model of candidates) {
-      const client = new VisionClient([{ baseUrl, apiKey, model }]);
+      const client = new VisionClient([{ baseUrl, apiKey, model }], probe);
       let read = await client.readText(frame, "image/jpeg", Date.now() + 40_000);
-      if (read === null) read = await client.readText(frame, "image/jpeg", Date.now() + 40_000);
+      if (read === null && busy()) read = await client.readText(frame, "image/jpeg", Date.now() + 40_000);
       if (exact(read)) {
         providers.push({ baseUrl, apiKey, model });
         console.error(`::notice title=Picture reading::${name}: ${model} read the sample frame`);
         return;
       }
-      if (read === null) silent ??= model;
-      console.error(`${name}: ${model} did not read the sample frame (${read === null ? "no answer" : `"${read}"`})`);
+      if (read === null && busy()) later ??= model;
+      tried.push(`${model}: ${read !== null ? `read "${read.slice(0, 60)}"` : why || "saw no text"}`);
     }
-    if (silent) {
-      // Rate limits and timeouts must not switch the feature off until the next deploy.
-      providers.push({ baseUrl, apiKey, model: silent });
-      console.error(`::warning title=Picture reading::${name}: no model answered the check; keeping ${silent} unverified`);
-    } else {
-      console.error(`::warning title=Picture reading::${name}: none of ${candidates.length} candidate models read the sample frame`);
-    }
+    if (later) providers.push({ baseUrl, apiKey, model: later });
+    console.error(`::warning title=Picture reading::${name}: ${tried.join("; ") || "no candidate models"}${later ? ` — keeping ${later} unverified` : ""}`);
   };
   if (GROQ_API_KEY) {
-    const ids = (await list(GROQ, GROQ_API_KEY)).map((m) => m.id).filter((id) => /llama-4|vision|llava|pixtral/i.test(id) && !/guard/i.test(id));
+    const ids = (await list(GROQ, GROQ_API_KEY)).map((m) => m.id).filter((id) => /qwen|llama-4|vision|llava|pixtral|gemma|gemini/i.test(id) && !/guard|whisper|tts/i.test(id));
     await firstWorking("groq", GROQ, GROQ_API_KEY, order(ids, GROQ_VISION_PREF, GROQ_VISION_MODEL));
   }
   if (OPENROUTER_API_KEY) {
