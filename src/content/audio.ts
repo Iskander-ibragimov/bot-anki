@@ -4,7 +4,7 @@ import { type TgApi, type TgMessage, TgUpload, tgErrorInfo } from "../tg/client"
 /** Job: upload a dictionary mp3 once (to the admin chat) and cache Telegram's file_id on the note. */
 export async function runVoiceJob(repo: Repo, tg: TgApi, adminChatId: number, p: { noteId: number; audioUrl: string }): Promise<void> {
   const note = await repo.getNote(p.noteId);
-  if (!note || note.audioFileId) return;
+  if (!note || note.audioFileId || note.audioUrl !== p.audioUrl) return; // deleted, already cached, or renamed since the job was queued
   const msg = await tg.call<TgMessage>("sendVoice", { chat_id: adminChatId, voice: p.audioUrl, disable_notification: true });
   const fileId = msg.voice?.file_id ?? msg.audio?.file_id;
   if (fileId) await repo.setNoteAudio(p.noteId, fileId);

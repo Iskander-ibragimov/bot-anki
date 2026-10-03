@@ -3,12 +3,13 @@ import { createBot, type BotDeps } from "../../src/bot/bot";
 import { Repo } from "../../src/db/repo";
 import { fakeTelegram } from "./fakeTelegram";
 
-export function harness(db: D1Database, opts: { now: number; fetch?: typeof fetch; repo?: Repo; synth?: BotDeps["synth"] }) {
+export function harness(db: D1Database, opts: { now: number; fetch?: typeof fetch; repo?: Repo; synth?: BotDeps["synth"]; vision?: boolean }) {
   const tg = fakeTelegram();
   const pending: Promise<unknown>[] = [];
   let now = opts.now;
   const deps: BotDeps = {
-    config: { botToken: "1:x", webhookSecret: "s", adminTgId: 999, llmProviders: [{ baseUrl: "https://llm/v1", apiKey: "k", model: "m" }] },
+    config: { botToken: "1:x", webhookSecret: "s", adminTgId: 999, llmProviders: [{ baseUrl: "https://llm/v1", apiKey: "k", model: "m" }],
+      visionProviders: opts.vision ? [{ baseUrl: "https://vision/v1", apiKey: "k", model: "v" }] : [] },
     repo: opts.repo ?? new Repo(db),
     fetch: opts.fetch ?? (async () => new Response("{}", { status: 500 })),
     waitUntil: (p) => { pending.push(p); },
