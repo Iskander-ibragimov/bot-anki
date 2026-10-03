@@ -190,7 +190,11 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const deck = await repo.getDeck(Number(ctx.match[1]));
     if (!deck || (deck.kind !== "catalog" && deck.ownerId !== ctx.user.id)) return toast(ctx);
     await repo.subscribe(ctx.user.id, deck.id, deps.now());
-    await editOrSend(ctx, clickedId(ctx), { text: dict(ctx.user.lang).deckSubscribed(esc(deckTitle(deck, ctx.user.lang))), keyboard: learnKeyboard(ctx.user.lang) });
+    const t = dict(ctx.user.lang);
+    // Without this note "deck added → Learn → all done" looks as if the deck did not work.
+    const limit = await reviews().newLimit(ctx.user);
+    const text = t.deckSubscribed(esc(deckTitle(deck, ctx.user.lang))) + (limit ? `\n\n${t.deckLater(limit.limit)}` : "");
+    await editOrSend(ctx, clickedId(ctx), { text, keyboard: learnKeyboard(ctx.user.lang) });
     await toast(ctx);
   });
   c.command("gen", async (ctx) => {
@@ -218,7 +222,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (ctx.match[1] === "no") { await content().cancel(ctx.user, id); await editOrSend(ctx, clickedId(ctx), { text: t.genCancelled, keyboard: [] }); return toast(ctx); }
     try {
       const d = await content().confirmDeck(ctx.user, id);
-      await editOrSend(ctx, clickedId(ctx), { text: t.genAdded(esc(d.title), d.count), keyboard: learnKeyboard(ctx.user.lang) });
+      const limit = await reviews().newLimit(ctx.user);
+      await editOrSend(ctx, clickedId(ctx), { text: t.genAdded(esc(d.title), d.count) + (limit ? `\n\n${t.deckLater(limit.limit)}` : ""), keyboard: learnKeyboard(ctx.user.lang) });
     } catch { await editOrSend(ctx, clickedId(ctx), { text: t.previewExpired, keyboard: [] }); }
     await toast(ctx);
   });

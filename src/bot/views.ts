@@ -95,6 +95,7 @@ export function renderDone(s: DaySummary, lang: Lang): Rendered {
   lines.push(t.doneTitle, t.doneToday(s.reviewsToday, s.learnedToday), t.doneTotals(s.totals.learned, s.totals.known, s.totals.learning, s.totals.new));
   if (s.nextLearningInMs != null) lines.push("", t.doneNextLearning(formatLong(s.nextLearningInMs, lang)));
   if (s.streak > 0) lines.push(t.streak(s.streak));
+  if (s.newLimit) lines.push("", t.doneNewLimit(s.newLimit.limit, s.newLimit.waiting));
   return { text: lines.join("\n"), keyboard: [[btn(t.addWords, "help:add"), btn(t.decksBtn, "decks")]] };
 }
 

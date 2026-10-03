@@ -15,7 +15,10 @@ export interface DaySummary {
   reviewsToday: number; learnedToday: number;
   totals: { learned: number; known: number; learning: number; new: number };
   nextLearningInMs: number | null; streak: number;
+  /** Set when new words are waiting but today's limit of new cards is used up. */
+  newLimit: NewLimit | null;
 }
+export interface NewLimit { limit: number; waiting: number }
 export type Screen =
   | { kind: "card"; view: CardView; counts: Counts; intervals: Record<Rating, string>; feedback: Feedback | null; canUndo: boolean }
   | { kind: "done"; summary: DaySummary; feedback: Feedback | null }
@@ -32,6 +35,10 @@ export const displayDirection = (u: Pick<User, "direction">): Direction => (u.di
 
 /** New cards still to come today: the user's own words always, the rest within the daily limit. */
 const newCount = (newLeft: number, q: QueueCounts) => q.newOwn + Math.min(newLeft, q.newAvailable - q.newOwn);
+
+/** New words exist, but today's allowance is spent: they wait for tomorrow (or for a higher limit in settings). */
+const limitOf = (user: Pick<User, "newPerDay">, q: QueueCounts): NewLimit | null =>
+  q.newAvailable > 0 && user.newPerDay - q.newDoneToday <= 0 ? { limit: user.newPerDay, waiting: q.newAvailable } : null;
 
 function toView(row: CardRow | (NewNote & { id: number; mem: Mem })): CardView {
   return {
@@ -66,7 +73,7 @@ export class ReviewService {
       const nextDue = c.learning.length ? Math.min(...c.learning.map((x) => x.mem.due)) : null;
       return {
         kind: "done", feedback,
-        summary: { reviewsToday: s.reviewsToday, learnedToday: s.learnedToday, totals, streak: user.streak,
+        summary: { reviewsToday: s.reviewsToday, learnedToday: s.learnedToday, totals, streak: user.streak, newLimit: limitOf(user, c.counts),
           nextLearningInMs: nextDue == null ? null : Math.max(0, nextDue - this.now) },
       };
     }
@@ -109,6 +116,13 @@ export class ReviewService {
     if (!res[0]?.meta.changes) return { kind: "stale" };
     const updated: User = { ...user, streak, lastStudyDay: today, lastReviewAt: this.now, mixCounter: user.mixCounter + 1 };
     return this.nextScreen(updated, feedbackOf(card.word, before, after, this.now));
+  }
+
+  /** Whether the daily limit is what keeps the user's new words back right now. */
+  async newLimit(user: User): Promise<NewLimit | null> {
+    const w = dayWindow(user.tzOffsetMin, this.now);
+    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user), newOrder: user.newOrder, limitEach: 1 });
+    return limitOf(user, c.counts);
   }
 
   /** Restores the last graded card (one level, like Anki’s undo). */

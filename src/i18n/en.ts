@@ -22,6 +22,8 @@ export const en: Dict = {
   doneToday: (reviews, learned) => `Today: ${reviews} reviews · +${learned} learned`,
   doneTotals: (l, k, g, n) => `Total: 🏆 ${l} · 🌳 ${k} · 🌿 ${g} · 🌱 ${n}`,
   doneNextLearning: (after) => `Learning cards return in ${after}. I’ll ping you.`,
+  doneNewLimit: (limit, waiting) => `🌱 No more new words today: the limit is ${limit} a day. ${waiting} more are waiting — we continue tomorrow.\nFor more new words today, raise “🆕 New per day” in /settings.`,
+  deckLater: (limit) => `Its new words will appear tomorrow: today’s limit of new words (${limit}) is already used.\nFor more new words today, raise “🆕 New per day” in /settings.`,
   streak: (d) => `🔥 Streak: ${d} d`,
   addWords: "➕ Add words",
   decksBtn: "📚 Decks",
