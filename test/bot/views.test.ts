@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderAddPreview, renderAwait, renderCard, renderDone, renderMyWords, type CardView } from "../../src/bot/views";
+import { renderAddPreview, renderAwait, renderCard, renderDeleteAsk, renderDone, renderMyWords, renderPhotoAsk, renderWord, type CardView } from "../../src/bot/views";
 import { en } from "../../src/i18n/en";
 import { ru } from "../../src/i18n/ru";
 import { newMem } from "../../src/srs/fsrs";
@@ -66,12 +66,12 @@ describe("views", () => {
     expect(flat.map((b) => b.callback_data)).toEqual(["g:7:3:1", "g:7:3:2", "g:7:3:3", "g:7:3:4"]);
     expect(flat.map((b) => b.text)).toEqual(["Снова <10м", "Трудно 1д", "Хорошо 2д", "Легко 4д"]);
     for (const b of flat) expect(new TextEncoder().encode(b.callback_data).length).toBeLessThanOrEqual(64);
-    expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "u"]);
+    expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "pic:3", "u"]);
   });
 
   it("voice button is on every card; undo only when allowed", () => {
     const { keyboard } = renderCard(view(), counts, iv, false, "ru");
-    expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3"]);
+    expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "pic:3"]);
   });
 
   it("html in word is escaped", () => {
@@ -119,20 +119,46 @@ describe("views", () => {
     expect(renderAwait({ side: "ru", text: "уютный", token: "abc" }, "ru").text).toContain("по-английски");
   });
 
-  it("my words: empty hint, list, and a note when only the latest are shown", () => {
-    expect(renderMyWords({ total: 0, items: [] }, "ru").text).toContain("пока пуст");
-    const some = renderMyWords({ total: 3, items: [{ word: "thrive", translation: "процветать" }, { word: "a<b", translation: "x" }] }, "ru");
-    expect(some.text).toContain("Мои слова</b> · 3");
-    expect(some.text).toContain("• <b>thrive</b> — процветать");
-    expect(some.text).toContain("a&lt;b");
-    expect(some.text).toContain("последние 2");
-    expect(some.keyboard.flat().map((b) => b.callback_data)).toEqual(["learn", "help:add"]);
-    // 30 long phrases must still fit into one Telegram message
-    const long = Array.from({ length: 30 }, (_, i) => ({ word: `${i} ${"very long phrase & ".repeat(5)}`.slice(0, 100), translation: "очень длинный перевод, ".repeat(14).slice(0, 300) }));
-    const big = renderMyWords({ total: 30, items: long }, "ru");
-    expect(big.text.length).toBeLessThanOrEqual(4096);
-    expect(big.text).toContain("…");
-    expect(big.text).toContain("• <b>0 very long");
+  it("my words: an empty hint, or a page of word buttons with paging", () => {
+    const empty = renderMyWords({ total: 0, page: 0, pages: 1, items: [] }, "ru");
+    expect(empty.text).toContain("пока пуст");
+    expect(empty.keyboard.flat().map((b) => b.callback_data)).toEqual(["help:add"]);
+    const items = [{ id: 7, word: "thrive", translation: "процветать" }, { id: 5, word: "a".repeat(90), translation: "очень длинный перевод ".repeat(10) }];
+    const one = renderMyWords({ total: 2, page: 0, pages: 1, items }, "ru");
+    expect(one.text).toContain("Мои слова</b> · 2");
+    expect(one.keyboard[0]![0]).toMatchObject({ text: "thrive — процветать", callback_data: "mw:o:7:0" });
+    expect(one.keyboard[1]![0]!.text.length).toBeLessThanOrEqual(64);
+    expect(one.keyboard.flat().map((b) => b.callback_data)).toEqual(["mw:o:7:0", "mw:o:5:0", "learn", "help:add"]);
+    const mid = renderMyWords({ total: 20, page: 1, pages: 3, items }, "ru");
+    expect(mid.keyboard[2]!.map((b) => b.callback_data)).toEqual(["mw:p:0", "mw:p:1", "mw:p:2"]);
+    expect(mid.keyboard[2]![1]!.text).toBe("2/3");
+    expect(renderMyWords({ total: 20, page: 0, pages: 3, items }, "ru").keyboard[2]!.map((b) => b.callback_data)).toEqual(["mw:p:0", "mw:p:1"]);
+  });
+
+  it("a word of the dictionary shows the whole card and what can be done with it", () => {
+    const note = { id: 7, deckId: 1, word: "Tom & Jerry", ipa: "/tɒm/", pos: "noun", translation: "Том и Джерри", exampleEn: "Tom & Jerry is on.", exampleRu: "Идёт «Том и Джерри».", audioFileId: null, audioUrl: null, sourceUrl: "https://example.com/a", imageFileId: "PIC" };
+    const r = renderWord(note, 2, "ru");
+    expect(r.text).toContain("<b>Tom &amp; Jerry</b>");
+    expect(r.text).toContain("<b>Том и Джерри</b>");
+    expect(r.text).toContain("🔗 example.com");
+    expect(r.text).toContain("🖼");
+    expect(r.keyboard.flat().map((b) => b.callback_data)).toEqual(["mw:e:7:2", "mw:i:7:2", "mw:d:7:2", "mw:p:2"]);
+    const ask = renderDeleteAsk("Tom & Jerry", 7, 2, "ru");
+    expect(ask.text).toContain("Tom &amp; Jerry");
+    expect(ask.keyboard.flat().map((b) => b.callback_data)).toEqual(["mw:dy:7:2", "mw:o:7:2"]);
+  });
+
+  it("a picture: buttons for the words that were read, or a request to type the word", () => {
+    const ask = renderPhotoAsk({ text: "He was <thorough>, as always.", words: ["thorough", "always"], phrase: "He was thorough, as always", token: "tk" }, "ru", true);
+    expect(ask.text).toContain("«He was &lt;thorough&gt;, as always.»");
+    expect(ask.keyboard.flat().map((b) => b.callback_data)).toEqual(["ph:w:tk:0", "ph:w:tk:1", "ph:all:tk", "ph:no:tk"]);
+    expect(ask.keyboard[0]!.map((b) => b.text)).toEqual(["thorough", "always"]);
+    const none = renderPhotoAsk({ text: null, words: [], phrase: null, token: "tk" }, "ru", true);
+    expect(none.text).toContain("не прочитался");
+    expect(none.keyboard.flat().map((b) => b.callback_data)).toEqual(["ph:no:tk"]);
+    expect(renderPhotoAsk({ text: null, words: [], phrase: null, token: "tk" }, "ru", false).text).toContain("Напишите слово");
+    const seven = renderPhotoAsk({ text: "x", words: ["a1", "a2", "a3", "a4", "a5", "a6", "a7"], phrase: null, token: "tk" }, "ru", true);
+    expect(seven.keyboard.slice(0, 3).map((row) => row.length)).toEqual([3, 3, 1]);
   });
 
   it("ru and en have the same keys", () => {

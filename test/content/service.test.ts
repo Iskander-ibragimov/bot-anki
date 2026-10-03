@@ -288,14 +288,14 @@ describe("adding one card", () => {
 
   it("My words lists the user's own cards, newest first, and they are studied before catalog words", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 3, patch: { newPerDay: 20 } });
-    expect(await service(repo, T).myWords(user)).toEqual({ total: 0, items: [] });
+    expect(await service(repo, T).myWords(user, 0)).toEqual({ total: 0, page: 0, pages: 1, items: [] });
     for (const [i, text] of ["cozy — уютный", "break the ice — растопить лёд"].entries()) {
       const svc = service(repo, T + i);
       const r = await svc.addEntry(user, text, []);
       if (r.kind !== "preview") throw new Error(r.kind);
       await svc.confirmAdd(user, r.previewId);
     }
-    expect(await service(repo, T).myWords(user)).toEqual({ total: 2, items: [
+    expect(await service(repo, T).myWords(user, 0)).toMatchObject({ total: 2, items: [
       { word: "break the ice", translation: "растопить лёд" }, { word: "cozy", translation: "уютный" },
     ] });
     for (const newOrder of ["deck", "random"] as const) {

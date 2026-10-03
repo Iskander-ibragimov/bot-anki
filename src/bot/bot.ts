@@ -4,7 +4,8 @@ import { isAdmin, adminStatsText, importDeckCsv } from "../admin/service";
 import { type Synth, playVoice } from "../content/audio";
 import { DictionaryClient } from "../content/dictionary";
 import { LlmClient } from "../content/llm";
-import { type AutoResult, ContentService, type EntryResult } from "../content/service";
+import { type AutoResult, type Awaiting, ContentService, type EntryResult, type PhotoAsk, tokenOf } from "../content/service";
+import { VisionClient } from "../content/vision";
 import type { Repo, User } from "../db/repo";
 import { remaining } from "../entitlements/service";
 import type { Config } from "../env";
@@ -15,7 +16,7 @@ import { cumulative } from "../stats/service";
 import { type TgApi, TgUpload } from "../tg/client";
 import { REMIND_TIMES, RETENTIONS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
 import { deckTitle, learnKeyboard, renderDecks, renderGenPreview, renderOnboarding, renderSettings, renderStats } from "./screens";
-import { type Keyboard, type Rendered, esc, hostOf, renderAddPreview, renderAwait, renderCard, renderDone, renderMyWords } from "./views";
+import { type Keyboard, type Rendered, esc, hostOf, renderAddPreview, renderAwait, renderCard, renderDeleteAsk, renderDone, renderMyWords, renderPhotoAsk, renderWord } from "./views";
 
 export interface BotDeps {
   config: Config;
@@ -40,7 +41,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       return (bot.api.raw as unknown as Record<string, (x: unknown) => Promise<T>>)[m]!(payload);
     },
   };
-  const content = () => new ContentService(repo, { dict: new DictionaryClient(deps.fetch), llm: new LlmClient(config.llmProviders, deps.fetch) }, deps.now());
+  const vision = new VisionClient(config.visionProviders, deps.fetch);
+  const content = () => new ContentService(repo, { dict: new DictionaryClient(deps.fetch), llm: new LlmClient(config.llmProviders, deps.fetch), vision }, deps.now());
   const reviews = () => new ReviewService(repo, deps.now());
 
   const markup = (keyboard: Keyboard) => (keyboard.length ? { inline_keyboard: keyboard } : undefined);
@@ -239,21 +241,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await send(ctx, renderEntry(res, ctx.user.lang));
   };
 
-  /** "Translate automatically" / "don't add" under the request for the other side. */
-  c.callbackQuery(/^tr:(auto|no):(\w+)$/, async (ctx) => {
+  const gone = async (ctx: Ctx) => { await editOrSend(ctx, clickedId(ctx), { text: dict(ctx.user.lang).awaitGone, keyboard: [] }); await toast(ctx); };
+  /** Translates a claimed side with AI and turns the tapped message into the card preview. */
+  const runAuto = async (ctx: Ctx, waiting: Awaiting) => {
     const user = ctx.user;
     const t = dict(user.lang);
     const svc = content();
-    const token = ctx.match[2]!;
-    const gone = async () => { await editOrSend(ctx, clickedId(ctx), { text: t.awaitGone, keyboard: [] }); await toast(ctx); };
-    if (ctx.match[1] === "no") {
-      if (!(await svc.cancelAwait(user, token))) return gone();
-      await editOrSend(ctx, clickedId(ctx), { text: t.notAdded, keyboard: [] });
-      return toast(ctx);
-    }
-    // Claimed before answering: whatever the user types while the translation runs starts a new card.
-    const waiting = await svc.takeAwait(user, token);
-    if (!waiting) return gone();
     const shown = await editOrSend(ctx, clickedId(ctx), { text: t.translating, keyboard: [] });
     await toast(ctx);
     // The AI call is slow: it runs after the webhook has answered.
@@ -262,10 +255,37 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
         await editOrSend(ctx, shown, renderEntry(await svc.autoTranslate(user, waiting), user.lang));
       } catch (e) {
         console.error("auto translate failed", e);
-        const retry = renderEntry({ kind: "failed", side: waiting.side, text: waiting.text, token }, user.lang);
+        const retry = renderEntry({ kind: "failed", side: waiting.side, text: waiting.text, token: tokenOf(waiting) }, user.lang);
         await editOrSend(ctx, shown, isD1Limit(e) ? { text: t.maintenance, keyboard: [] } : retry).catch(() => undefined);
       }
     })());
+  };
+
+  /** "Translate automatically" / "don't add" under the request for the other side. */
+  c.callbackQuery(/^tr:(auto|no):(\w+)$/, async (ctx) => {
+    const svc = content();
+    const token = ctx.match[2]!;
+    if (ctx.match[1] === "no") {
+      if (!(await svc.cancelAwait(ctx.user, token))) return gone(ctx);
+      await editOrSend(ctx, clickedId(ctx), { text: dict(ctx.user.lang).notAdded, keyboard: [] });
+      return toast(ctx);
+    }
+    // Claimed before answering: whatever the user types while the translation runs starts a new card.
+    const waiting = await svc.takeAwait(ctx.user, token);
+    return waiting ? runAuto(ctx, waiting) : gone(ctx);
+  });
+
+  /** Buttons under a picture: a word read from it, the whole phrase, or "don't add". */
+  c.callbackQuery(/^ph:(w|all|no):(\w+?)(?::(\d+))?$/, async (ctx) => {
+    const svc = content();
+    const token = ctx.match[2]!;
+    if (ctx.match[1] === "no") {
+      if (!(await svc.cancelPhoto(ctx.user, token))) return gone(ctx);
+      await editOrSend(ctx, clickedId(ctx), { text: dict(ctx.user.lang).notAdded, keyboard: [] });
+      return toast(ctx);
+    }
+    const waiting = await svc.pickFromPhoto(ctx.user, token, ctx.match[1] === "all" ? "all" : Number(ctx.match[3] ?? -1));
+    return waiting ? runAuto(ctx, waiting) : gone(ctx);
   });
 
   c.callbackQuery(/^add:(ok|edit|no):(\d+)$/, async (ctx) => {
@@ -288,9 +308,71 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await toast(ctx);
   });
 
-  const showMyWords = async (ctx: Ctx) => send(ctx, renderMyWords(await content().myWords(ctx.user), ctx.user.lang));
-  c.command("mywords", async (ctx) => { if (await ready(ctx)) await showMyWords(ctx); });
-  c.callbackQuery("mywords", async (ctx) => { await toast(ctx); await showMyWords(ctx); });
+  /* "My words": the list, one word, edit, picture, delete */
+  c.command("mywords", async (ctx) => { if (await ready(ctx)) await send(ctx, renderMyWords(await content().myWords(ctx.user, 0), ctx.user.lang)); });
+  c.callbackQuery("mywords", async (ctx) => { await toast(ctx); await send(ctx, renderMyWords(await content().myWords(ctx.user, 0), ctx.user.lang)); });
+  c.callbackQuery(/^mw:p:(\d+)$/, async (ctx) => {
+    await editOrSend(ctx, clickedId(ctx), renderMyWords(await content().myWords(ctx.user, Number(ctx.match[1])), ctx.user.lang));
+    await toast(ctx);
+  });
+  c.callbackQuery(/^mw:(o|e|i|d|dy):(\d+):(\d+)$/, async (ctx) => {
+    const t = dict(ctx.user.lang);
+    const lang = ctx.user.lang;
+    const [, action, idText, pageText] = ctx.match;
+    const noteId = Number(idText), page = Number(pageText);
+    const svc = content();
+    const note = await svc.myWord(ctx.user, noteId);
+    if (!note) {
+      // deleted meanwhile: back to the list
+      await editOrSend(ctx, clickedId(ctx), renderMyWords(await svc.myWords(ctx.user, page), lang));
+      return toast(ctx, t.wordGone);
+    }
+    switch (action) {
+      case "o": await editOrSend(ctx, clickedId(ctx), renderWord(note, page, lang)); return toast(ctx);
+      case "d": await editOrSend(ctx, clickedId(ctx), renderDeleteAsk(note.word, noteId, page, lang)); return toast(ctx);
+      case "dy": {
+        const word = await svc.deleteWord(ctx.user, noteId);
+        await editOrSend(ctx, clickedId(ctx), renderMyWords(await svc.myWords(ctx.user, page), lang));
+        return toast(ctx, word ? t.wordDeleted(word) : t.wordGone);
+      }
+      case "e":
+        await svc.startWordEdit(ctx.user, noteId, page);
+        await toast(ctx);
+        await ctx.reply(t.wordEditAsk(esc(note.word)), HTML);
+        return;
+      case "i": return askForPicture(ctx, noteId, page);
+    }
+  });
+
+  /* a picture for a word the user already has: asked for with a button, never guessed */
+  const askForPicture = async (ctx: Ctx, noteId: number, page: number | null) => {
+    const t = dict(ctx.user.lang);
+    const r = await content().askPicture(ctx.user, noteId, page);
+    if (!r) return toast(ctx, t.staleButton);
+    await toast(ctx);
+    await send(ctx, r.hasImage
+      ? { text: t.picAskReplace(esc(r.word)), keyboard: [[{ text: t.picRemoveBtn, callback_data: `pic:rm:${noteId}` }]] }
+      : { text: t.picAsk(esc(r.word)), keyboard: [] });
+  };
+  /** If the review card on screen is this word, sends it again so that it shows the change. */
+  const refreshCardOf = async (ctx: Ctx, noteId: number): Promise<boolean> => {
+    const session = await repo.getSession(ctx.user.id);
+    const card = session?.cardId ? await repo.getCard(ctx.user.id, session.cardId) : null;
+    if (!session || !card || card.noteId !== noteId) return false;
+    const screen = await reviews().cardScreen(ctx.user, card.id);
+    if (!screen) return false;
+    await show(ctx, screen, session.messageId ?? undefined);
+    return true;
+  };
+  c.callbackQuery(/^pic:(\d+)$/, async (ctx) => askForPicture(ctx, Number(ctx.match[1]), null));
+  c.callbackQuery(/^pic:rm:(\d+)$/, async (ctx) => {
+    const t = dict(ctx.user.lang);
+    const noteId = Number(ctx.match[1]);
+    const word = await content().removePicture(ctx.user, noteId);
+    if (!word) return toast(ctx, t.staleButton);
+    await editOrSend(ctx, clickedId(ctx), { text: t.picRemoved(esc(word)), keyboard: [] });
+    if (!(await refreshCardOf(ctx, noteId))) await toast(ctx);
+  });
 
   /* settings, stats, help */
   c.command("settings", async (ctx) => { if (await ready(ctx)) await send(ctx, renderSettings(ctx.user)); });
@@ -337,26 +419,61 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await addFlow(ctx, arg, toEntities(ctx.message?.entities, full.indexOf(arg)));
   });
 
-  /* a picture: with a caption it is a new card; without one it goes to the card on screen */
+  /** The picture itself, for reading the text on it. A size of about 1280 px is enough for subtitles. */
+  const loadPhoto = async (ctx: Ctx, sizes: { file_id: string; width: number; height: number }[]) => {
+    const fit = sizes.filter((p) => Math.max(p.width, p.height) <= 1280).at(-1) ?? sizes[0]!;
+    const file = await ctx.api.getFile(fit.file_id);
+    if (!file.file_path) return null;
+    const res = await deps.fetch(`https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`);
+    if (!res.ok) return null;
+    return { bytes: new Uint8Array(await res.arrayBuffer()), mime: /\.png$/i.test(file.file_path) ? "image/png" : "image/jpeg" };
+  };
+
+  /*
+   * A picture is always about a NEW card, unless the user has just asked to attach one to a word:
+   * with a caption the caption is the card; without one the text on the picture is read and offered as words.
+   */
   c.on("message:photo", async (ctx) => {
     const t = dict(ctx.user.lang);
+    const lang = ctx.user.lang;
     if (ctx.user.onboardingStep) { await ctx.reply(t.chooseAbove); return; }
-    const fileId = ctx.message.photo.at(-1)!.file_id;
+    const sizes = ctx.message.photo;
+    const fileId = sizes.at(-1)!.file_id;
     const raw = ctx.message.caption ?? "";
     const cmd = raw.match(/^\s*\/add(?:@\w+)?\s*/)?.[0].length ?? 0; // "/add word" typed as the caption
     if (raw.slice(cmd).trim()) return addFlow(ctx, raw.slice(cmd), toEntities(ctx.message.caption_entities, cmd), fileId);
     if (ctx.message.media_group_id) return; // the other photos of an album: only the captioned one counts
-    const waiting = await content().attachImageToAwait(ctx.user, fileId); // "cozy", then a photo: the picture is for that card
-    if (waiting) { await send(ctx, renderAwait(waiting, ctx.user.lang, true)); return; }
-    const session = await repo.getSession(ctx.user.id);
-    const card = session?.cardId ? await repo.getCard(ctx.user.id, session.cardId) : null;
-    if (!session || !card) { await ctx.reply(t.photoNeedsWord); return; }
-    await content().attachImage(ctx.user, card.noteId, fileId);
-    const screen = await reviews().cardScreen(ctx.user, card.id);
-    if (screen) await show(ctx, screen, session.messageId ?? undefined);
+    const svc = content();
+
+    const attached = await svc.attachPendingPicture(ctx.user, fileId); // the picture button was pressed for some word
+    if (attached) {
+      const inList = attached.page !== null ? await svc.myWord(ctx.user, attached.noteId) : null;
+      if (inList) { await send(ctx, renderWord(inList, attached.page!, lang)); return; }
+      if (!(await refreshCardOf(ctx, attached.noteId))) await send(ctx, { text: t.picAttached(esc(attached.word)), keyboard: [] });
+      return;
+    }
+    const waiting = await svc.attachImageToAwait(ctx.user, fileId); // "cozy", then a photo: the picture is for that card
+    if (waiting) { await send(ctx, renderAwait(waiting, lang, true)); return; }
+
+    const began = await svc.beginPhoto(ctx.user, fileId);
+    const blank: PhotoAsk = { text: null, words: [], phrase: null, token: began.token };
+    if (!vision.available) { await send(ctx, renderPhotoAsk(blank, lang, false)); return; }
+    const m = await ctx.reply(t.readingPhoto);
+    // Reading the picture takes seconds: it runs after the webhook has answered.
+    deps.waitUntil((async () => {
+      let ask: PhotoAsk | null = blank;
+      try {
+        ask = await svc.readPhoto(began.user, began.token, await loadPhoto(ctx, sizes).catch(() => null));
+      } catch (e) {
+        console.error("reading a picture failed", e);
+      }
+      // The user has already typed the word for this picture: nothing to ask.
+      if (!ask) { await ctx.api.deleteMessage(ctx.user.chatId, m.message_id).catch(() => undefined); return; }
+      await editOrSend(ctx, m.message_id, renderPhotoAsk(ask, lang, true)).catch(() => undefined);
+    })());
   });
 
-  /* free text: onboarding answers, a corrected translation, own cards */
+  /* free text: onboarding answers, a corrected translation, an edited word, own cards */
   c.on("message:text", async (ctx) => {
     const text = ctx.message.text;
     const t = dict(ctx.user.lang);
@@ -377,6 +494,17 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
         await svc.clearPending(ctx.user);
         ctx.user = { ...ctx.user, pendingEdit: null };
       }
+    }
+    if (svc.pendingKind(ctx.user) === "edit") {
+      const r = await svc.applyWordEdit(ctx.user, text, toEntities(ctx.message.entities));
+      if (r?.kind === "saved") {
+        const note = await svc.myWord(ctx.user, r.noteId);
+        if (note) await send(ctx, renderWord(note, r.page, ctx.user.lang));
+        return;
+      }
+      if (r?.kind === "duplicate") { await ctx.reply(t.wordEditDuplicate(esc(r.word)), HTML); return; }
+      if (r?.kind === "hint") { await ctx.reply(r.reason === "unclear" ? t.unclearEntry : t.wordEditHint, HTML); return; }
+      ctx.user = { ...ctx.user, pendingEdit: null }; // the word is gone: this message is a new card
     }
     await addFlow(ctx, text, toEntities(ctx.message.entities));
   });

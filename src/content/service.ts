@@ -1,9 +1,10 @@
-import { type NoteInput, type Repo, type User, wordKey } from "../db/repo";
+import { type NoteInput, type NoteRow, type Repo, type User, wordKey } from "../db/repo";
 import { consume, refund } from "../entitlements/service";
 import { enqueue } from "../jobs/queue";
 import type { DictionaryClient } from "./dictionary";
 import { type Entity, type Side, parseEntry } from "./links";
 import { DECK_SYSTEM, type LlmClient, LlmUnavailable, RU_SYSTEM, WORDS_SYSTEM, completeCards } from "./llm";
+import { exampleFrom, wordChoices } from "./photo";
 
 export interface CardDraft {
   word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string;
@@ -30,12 +31,32 @@ export type AutoResult =
   | { kind: "preview"; previewId: number; item: CardDraft };
 export type GenResult = { kind: "limit" } | { kind: "failed" } | { kind: "preview"; previewId: number; topic: string; items: CardDraft[] };
 
-interface Deps { dict: DictionaryClient; llm: LlmClient }
-/** One side of a card the user has sent; kept until the other side arrives. */
-export interface Awaiting { side: Side; text: string; url: string | null; imageFileId: string | null; at: number }
+/** Reads the text on a picture; absent when no vision model is configured. */
+export interface Vision { available: boolean; readText(bytes: Uint8Array, mime: string, deadline?: number): Promise<string | null> }
+interface Deps { dict: DictionaryClient; llm: LlmClient; vision?: Vision }
+/** One side of a card the user has sent; kept until the other side arrives. `context` is the line it was taken from. */
+export interface Awaiting { side: Side; text: string; url: string | null; imageFileId: string | null; at: number; context?: string | null }
+/** A picture sent without a caption: the card is built from what is written on it, or from what the user types next. */
+interface PhotoPending { fileId: string; text: string | null; words: string[]; phrase: string | null; at: number }
+export interface PhotoAsk { text: string | null; words: string[]; phrase: string | null; token: string }
+export type EditResult =
+  | { kind: "saved"; noteId: number; page: number }
+  | { kind: "duplicate"; word: string; noteId: number; page: number }
+  | { kind: "hint"; reason: "too-many" | "unclear" | "empty" };
+export interface WordPage { total: number; page: number; pages: number; items: { id: number; word: string; translation: string }[] }
 /** Identifies one waiting side, so that buttons under an older request cannot act on a newer word. */
-const tokenOf = (w: Awaiting) => w.at.toString(36);
-interface Pending { await?: Awaiting; preview?: { previewId: number } }
+export const tokenOf = (w: { at: number }) => w.at.toString(36);
+const PAGE_SIZE = 8;
+const sameText = (a: string, b: string) => a.toLowerCase().replace(/[^a-z]+/g, "") === b.toLowerCase().replace(/[^a-z]+/g, "");
+interface Pending {
+  await?: Awaiting;
+  preview?: { previewId: number };
+  photo?: PhotoPending;
+  /** "Edit" in My words: the next message is the new text of this card. */
+  editNote?: { noteId: number; page: number; at: number };
+  /** The picture button: the next photo goes to this word. */
+  pic?: { noteId: number; page: number | null; at: number };
+}
 
 const PENDING_URL_MS = 10 * 60_000;
 const AWAIT_MS = 10 * 60_000;
@@ -65,7 +86,10 @@ export class ContentService {
       await this.repo.updateUser(user.id, { pendingUrl: entry.url, pendingUrlAt: this.now });
       return { kind: "ask-words", url: entry.url };
     }
-    const waiting = pendingOf(user).await;
+    const pending = pendingOf(user);
+    const waiting = pending.await;
+    // A picture sent just before this message is the picture of this card.
+    const photo = pending.photo && this.now - pending.photo.at <= AWAIT_MS ? pending.photo : null;
     const patch: Partial<User> = {};
     let url = entry.url;
     if (user.pendingUrl && user.pendingUrlAt != null) {
@@ -73,7 +97,8 @@ export class ContentService {
       patch.pendingUrl = null;
       patch.pendingUrlAt = null;
     }
-    let image = opts.imageFileId ?? null;
+    let image = opts.imageFileId ?? photo?.fileId ?? null;
+    let context = opts.imageFileId ? null : (photo?.text ?? null);
 
     let en: string, ru: string;
     if (entry.kind === "pair") {
@@ -84,12 +109,13 @@ export class ContentService {
       ru = entry.side === "ru" ? entry.text : waiting.text;
       url = url ?? waiting.url;
       image = image ?? waiting.imageFileId;
+      context = context ?? waiting.context ?? null;
     } else {
       if (entry.side === "en") {
         const dup = await this.duplicateOf(user, entry.text, url, image);
         if (dup) { await this.repo.updateUser(user.id, { ...patch, pendingEdit: null }); return { kind: "duplicate", duplicate: dup }; }
       }
-      const next: Awaiting = { side: entry.side, text: entry.text, url, imageFileId: image, at: this.now };
+      const next: Awaiting = { side: entry.side, text: entry.text, url, imageFileId: image, at: this.now, context };
       await this.repo.updateUser(user.id, { ...patch, pendingEdit: JSON.stringify({ await: next } satisfies Pending) });
       return { kind: "await", side: entry.side, text: entry.text, token: tokenOf(next) };
     }
@@ -99,7 +125,7 @@ export class ContentService {
     if (dup) return { kind: "duplicate", duplicate: dup };
     const d = await this.deps.dict.lookup(en, DICT_TIMEOUT_MS);
     return this.preview(user, {
-      word: en, translation: ru, ipa: d?.ipa ?? null, pos: d?.pos ?? "", exampleEn: d?.exampleEn ?? "", exampleRu: "",
+      word: en, translation: ru, ipa: d?.ipa ?? null, pos: d?.pos ?? "", exampleEn: exampleFrom(context, en) ?? d?.exampleEn ?? "", exampleRu: "",
       sourceUrl: url, audioUrl: d?.audioUrl ?? null, imageFileId: image,
     });
   }
@@ -118,14 +144,19 @@ export class ContentService {
   /** Completes a claimed side with AI. On failure the side is put back, so the user can type the other one. */
   async autoTranslate(user: User, w: Awaiting): Promise<AutoResult> {
     const failed = async (): Promise<AutoResult> => {
-      await this.repo.restorePendingEdit(user.id, JSON.stringify({ await: w } satisfies Pending));
+      await this.repo.swapPendingEdit(user.id, null, JSON.stringify({ await: w } satisfies Pending));
       return { kind: "failed", side: w.side, text: w.text, token: tokenOf(w) };
     };
     const deadline = Date.now() + this.deadlineMs;
+    // A word taken from a film line is translated in the sense it has there, and the line is its example.
+    const line = w.side === "en" ? exampleFrom(w.context, w.text) : null;
+    const ask = w.side === "ru" ? `Russian:\n${w.text}`
+      : line ? `Words:\n${w.text}\nThe word comes from this line: "${line}". Translate it in the sense it has there. exampleEn must be exactly that line, exampleRu its Russian translation.`
+      : `Words:\n${w.text}`;
     try {
       const [dict, cards] = await Promise.all([
         w.side === "en" ? this.deps.dict.lookup(w.text, Math.min(DICT_TIMEOUT_MS, this.deadlineMs)) : Promise.resolve(null),
-        completeCards(this.deps.llm, w.side === "en" ? WORDS_SYSTEM : RU_SYSTEM, w.side === "en" ? `Words:\n${w.text}` : `Russian:\n${w.text}`, deadline),
+        completeCards(this.deps.llm, w.side === "en" ? WORDS_SYSTEM : RU_SYSTEM, ask, deadline),
       ]);
       const a = cards[0];
       // The user's own text is kept as written; AI only supplies the missing side and the example.
@@ -135,7 +166,7 @@ export class ContentService {
       const dup = await this.duplicateOf(user, en, w.url, w.imageFileId);
       if (dup) return { kind: "duplicate", duplicate: dup };
       return this.preview(user, {
-        word: en, translation: ru, ipa: dict?.ipa ?? a.ipa ?? null, pos: dict?.pos || a.pos, exampleEn: a.exampleEn, exampleRu: a.exampleRu,
+        word: en, translation: ru, ipa: dict?.ipa ?? a.ipa ?? null, pos: dict?.pos || a.pos, exampleEn: line && sameText(a.exampleEn, line) ? line : a.exampleEn, exampleRu: a.exampleRu,
         sourceUrl: w.url, audioUrl: dict?.audioUrl ?? null, imageFileId: w.imageFileId,
       });
     } catch (e) {
@@ -197,9 +228,85 @@ export class ContentService {
     return { previewId: edit.previewId, items };
   }
 
-  pendingKind(user: User): "await" | "preview" | null {
+  /** What the user's next message or photo belongs to. Requests that wait for a reply expire after 10 minutes. */
+  pendingKind(user: User): "await" | "preview" | "photo" | "edit" | "pic" | null {
     const p = pendingOf(user);
-    return p.preview ? "preview" : p.await ? "await" : null;
+    const live = (x?: { at: number }) => !!x && this.now - x.at <= AWAIT_MS;
+    if (p.preview) return "preview";
+    if (live(p.editNote)) return "edit";
+    if (live(p.pic)) return "pic";
+    if (p.await) return "await";
+    return live(p.photo) ? "photo" : null;
+  }
+
+  /* ---------- a card from a picture ---------- */
+
+  /** A picture without a caption starts a new card. Returns the token of this request and the user row as it is now. */
+  async beginPhoto(user: User, fileId: string): Promise<{ token: string; user: User }> {
+    const photo: PhotoPending = { fileId, text: null, words: [], phrase: null, at: this.now };
+    const pendingEdit = JSON.stringify({ photo } satisfies Pending);
+    await this.repo.updateUser(user.id, { pendingEdit });
+    return { token: tokenOf(photo), user: { ...user, pendingEdit } };
+  }
+
+  /**
+   * Reads the text on the picture and remembers it with the request. `user` must be the row beginPhoto left behind:
+   * if the user has typed something meanwhile, the result is dropped (null).
+   */
+  async readPhoto(user: User, token: string, image: { bytes: Uint8Array; mime: string } | null): Promise<PhotoAsk | null> {
+    const before = pendingOf(user).photo;
+    if (!before || tokenOf(before) !== token) return null;
+    const text = image && this.deps.vision?.available ? await this.deps.vision.readText(image.bytes, image.mime, Date.now() + this.deadlineMs).catch(() => null) : null;
+    const choices = text ? wordChoices(text) : { words: [], phrase: null };
+    const photo: PhotoPending = { ...before, text, ...choices };
+    const kept = await this.repo.swapPendingEdit(user.id, user.pendingEdit, JSON.stringify({ photo } satisfies Pending));
+    return kept ? { text, ...choices, token } : null;
+  }
+
+  /** A word button (or "the whole phrase") under the picture: the choice is claimed for auto-translation. */
+  async pickFromPhoto(user: User, token: string, choice: number | "all"): Promise<Awaiting | null> {
+    const photo = pendingOf(user).photo;
+    if (!photo || tokenOf(photo) !== token) return null;
+    const text = choice === "all" ? photo.phrase : photo.words[choice];
+    if (!text) return null;
+    await this.repo.updateUser(user.id, { pendingEdit: null });
+    return { side: "en", text, url: null, imageFileId: photo.fileId, at: this.now, context: photo.text };
+  }
+
+  async cancelPhoto(user: User, token: string): Promise<boolean> {
+    const photo = pendingOf(user).photo;
+    if (!photo || tokenOf(photo) !== token) return false;
+    await this.repo.updateUser(user.id, { pendingEdit: null });
+    return true;
+  }
+
+  /* ---------- a picture for a word the user already has ---------- */
+
+  /** The picture button: the next photo without a caption goes to this word. */
+  async askPicture(user: User, noteId: number, page: number | null): Promise<{ word: string; hasImage: boolean } | null> {
+    const note = await this.repo.getNoteForUser(user.id, noteId);
+    if (!note) return null;
+    await this.repo.updateUser(user.id, { pendingEdit: JSON.stringify({ pic: { noteId, page, at: this.now } } satisfies Pending) });
+    return { word: note.word, hasImage: !!note.imageFileId };
+  }
+
+  async attachPendingPicture(user: User, imageFileId: string): Promise<{ noteId: number; word: string; page: number | null } | null> {
+    const pic = pendingOf(user).pic;
+    if (!pic || this.now - pic.at > AWAIT_MS) return null;
+    const note = await this.repo.getNoteForUser(user.id, pic.noteId);
+    await this.repo.updateUser(user.id, { pendingEdit: null });
+    if (!note) return null;
+    await this.repo.setUserMedia(user.id, note.id, { imageFileId });
+    return { noteId: note.id, word: note.word, page: pic.page };
+  }
+
+  /** Returns the word whose picture was removed, or null when the user has no such word. */
+  async removePicture(user: User, noteId: number): Promise<string | null> {
+    const note = await this.repo.getNoteForUser(user.id, noteId);
+    if (!note) return null;
+    await this.repo.clearUserImage(user.id, noteId);
+    if (pendingOf(user).pic?.noteId === noteId) await this.repo.updateUser(user.id, { pendingEdit: null });
+    return note.word;
   }
 
   /** Saves the previewed card into the user's own dictionary ("My words"). */
@@ -213,18 +320,56 @@ export class ContentService {
     await this.endEditOf(user, previewId);
     if (item.imageFileId) await this.repo.setUserMedia(user.id, noteId!, { imageFileId: item.imageFileId });
     if (item.audioUrl) await enqueue(this.repo.db, "voice", { noteId, audioUrl: item.audioUrl }, this.now, `voice:${noteId}`);
-    const { total } = await this.repo.listCustomNotes(user.id, 1);
+    const { total } = await this.repo.listCustomNotes(user.id, 0);
     return { word: item.word, total };
   }
 
-  /** The user's own dictionary: how many cards and the latest ones. */
-  async myWords(user: User, limit = 30): Promise<{ total: number; items: { word: string; translation: string }[] }> {
-    return this.repo.listCustomNotes(user.id, limit);
+  /* ---------- managing "My words" ---------- */
+
+  /** One page of the user's own dictionary, newest first. A page past the end shows the last one. */
+  async myWords(user: User, page: number): Promise<WordPage> {
+    let p = Math.max(0, Math.floor(page) || 0);
+    let list = await this.repo.listCustomNotes(user.id, PAGE_SIZE, p * PAGE_SIZE);
+    const pages = Math.max(1, Math.ceil(list.total / PAGE_SIZE));
+    if (p >= pages) { p = pages - 1; list = await this.repo.listCustomNotes(user.id, PAGE_SIZE, p * PAGE_SIZE); }
+    return { total: list.total, page: p, pages, items: list.items };
   }
 
-  /** Attaches the user's picture to a word they already have (e.g. the card on screen). */
-  async attachImage(user: User, noteId: number, imageFileId: string): Promise<void> {
-    await this.repo.setUserMedia(user.id, noteId, { imageFileId });
+  async myWord(user: User, noteId: number): Promise<NoteRow | null> { return this.repo.getCustomNote(user.id, noteId); }
+
+  /** "Edit": the next message replaces the word, the translation, or both. Returns the word, or null if it is not the user's. */
+  async startWordEdit(user: User, noteId: number, page: number): Promise<string | null> {
+    const note = await this.repo.getCustomNote(user.id, noteId);
+    if (!note) return null;
+    await this.repo.updateUser(user.id, { pendingEdit: JSON.stringify({ editNote: { noteId, page, at: this.now } } satisfies Pending) });
+    return note.word;
+  }
+
+  /** Applies the message to the card being edited: English replaces the word, Russian the translation, a pair both. */
+  async applyWordEdit(user: User, text: string, entities: Entity[]): Promise<EditResult | null> {
+    const edit = pendingOf(user).editNote;
+    if (!edit || this.now - edit.at > AWAIT_MS) return null;
+    const note = await this.repo.getCustomNote(user.id, edit.noteId);
+    if (!note) { await this.repo.updateUser(user.id, { pendingEdit: null }); return null; }
+    const entry = parseEntry(text, entities);
+    if (entry.kind === "too-many" || entry.kind === "unclear") return { kind: "hint", reason: entry.kind };
+    if (entry.kind !== "pair" && entry.kind !== "single") return { kind: "hint", reason: "empty" };
+    const word = entry.kind === "pair" ? entry.en : entry.side === "en" ? entry.text : undefined;
+    const translation = entry.kind === "pair" ? entry.ru : entry.side === "ru" ? entry.text : undefined;
+    if (word !== undefined && wordKey(word) !== wordKey(note.word)) {
+      const taken = (await this.repo.findNotesForUser(user.id, [word])).get(wordKey(word));
+      if (taken && taken.id !== note.id) return { kind: "duplicate", word, noteId: note.id, page: edit.page };
+    }
+    await this.repo.updateCustomNote(user.id, note.id, { ...(word !== undefined ? { word } : {}), ...(translation !== undefined ? { translation } : {}) });
+    await this.repo.updateUser(user.id, { pendingEdit: null });
+    return { kind: "saved", noteId: note.id, page: edit.page };
+  }
+
+  /** Deletes a card of the user's own dictionary with its progress. Returns the word, or null if it is not theirs. */
+  async deleteWord(user: User, noteId: number): Promise<string | null> {
+    const note = await this.repo.getCustomNote(user.id, noteId);
+    if (!note || !(await this.repo.deleteCustomNote(user.id, noteId))) return null;
+    return note.word;
   }
 
   async cancel(user: User, previewId: number): Promise<void> {

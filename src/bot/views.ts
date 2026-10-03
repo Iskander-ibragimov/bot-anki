@@ -84,7 +84,7 @@ export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, str
   const keyboard: Keyboard = [
     [btn(`${t.again} ${intervals[1]}`, g(1), "danger"), btn(`${t.hard} ${intervals[2]}`, g(2))],
     [btn(`${t.good} ${intervals[3]}`, g(3), "success"), btn(`${t.easy} ${intervals[4]}`, g(4), "primary")],
-    canUndo ? [btn(t.speak, `v:${v.noteId}`), btn(t.undo, "u")] : [btn(t.speak, `v:${v.noteId}`)],
+    [btn(t.speak, `v:${v.noteId}`), btn(t.picBtn, `pic:${v.noteId}`), ...(canUndo ? [btn(t.undo, "u")] : [])],
   ];
   return v.imageFileId ? { text: lines.join("\n"), keyboard, photo: v.imageFileId } : { text: lines.join("\n"), keyboard };
 }
@@ -122,23 +122,51 @@ export function renderAwait(w: { side: "en" | "ru"; text: string; token: string 
 }
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s);
-/** Telegram allows 4096 characters per message; the list stops before that. */
-const LIST_BUDGET = 3600;
+const rows = <T>(list: T[], size: number): T[][] => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 
-/** The user's own dictionary. */
-export function renderMyWords(list: { total: number; items: { word: string; translation: string }[] }, lang: Lang): Rendered {
+/** The user's own dictionary: one page of words as buttons; a tap opens the word. */
+export function renderMyWords(list: { total: number; page: number; pages: number; items: { id: number; word: string; translation: string }[] }, lang: Lang): Rendered {
   const t = dict(lang);
-  const more = [btn(t.moreBtn, "help:add")];
-  if (!list.total) return { text: t.myWordsEmpty, keyboard: [more] };
-  const lines: string[] = [];
-  let size = 0;
-  for (const i of list.items) {
-    const line = `• <b>${esc(clip(i.word, 60))}</b> — ${esc(clip(i.translation, 80))}`;
-    if (size + line.length > LIST_BUDGET) break;
-    lines.push(line);
-    size += line.length + 1;
+  const more = btn(t.moreBtn, "help:add");
+  if (!list.total) return { text: t.myWordsEmpty, keyboard: [[more]] };
+  const keyboard: Keyboard = list.items.map((i) => [btn(`${clip(i.word, 28)} — ${clip(i.translation, 30)}`, `mw:o:${i.id}:${list.page}`)]);
+  if (list.pages > 1) {
+    const nav: Button[] = [];
+    if (list.page > 0) nav.push(btn("◀", `mw:p:${list.page - 1}`));
+    nav.push(btn(`${list.page + 1}/${list.pages}`, `mw:p:${list.page}`));
+    if (list.page < list.pages - 1) nav.push(btn("▶", `mw:p:${list.page + 1}`));
+    keyboard.push(nav);
   }
-  const text = [t.myWordsTitle(list.total), "", ...lines];
-  if (list.total > lines.length) text.push("", t.myWordsLatest(lines.length));
-  return { text: text.join("\n"), keyboard: [[btn(t.learnBtn, "learn", "primary")], more] };
+  keyboard.push([btn(t.learnBtn, "learn", "primary"), more]);
+  return { text: `${t.myWordsTitle(list.total)}\n${t.myWordsHint}`, keyboard };
+}
+
+/** One word of the dictionary with its actions. `page` is the list page to return to. */
+export function renderWord(n: PreviewItem & { id: number }, page: number, lang: Lang): Rendered {
+  const t = dict(lang);
+  const text = renderAddPreview(n, 0, lang).text;
+  return {
+    text,
+    keyboard: [
+      [btn(t.wordEditBtn, `mw:e:${n.id}:${page}`), btn(t.wordPicBtn, `mw:i:${n.id}:${page}`)],
+      [btn(t.wordDeleteBtn, `mw:d:${n.id}:${page}`)],
+      [btn(t.backToListBtn, `mw:p:${page}`)],
+    ],
+  };
+}
+
+export function renderDeleteAsk(word: string, noteId: number, page: number, lang: Lang): Rendered {
+  const t = dict(lang);
+  return { text: t.wordDeleteAsk(esc(word)), keyboard: [[btn(t.wordDeleteYes, `mw:dy:${noteId}:${page}`, "danger"), btn(t.wordDeleteNo, `mw:o:${noteId}:${page}`)]] };
+}
+
+/** A picture without a caption: the words read from it as buttons, or a request to type the word. */
+export function renderPhotoAsk(a: { text: string | null; words: string[]; phrase: string | null; token: string }, lang: Lang, tried: boolean): Rendered {
+  const t = dict(lang);
+  const cancel = [btn(t.awaitCancelBtn, `ph:no:${a.token}`)];
+  if (!a.text) return { text: tried ? t.photoNoText : t.photoAskWord, keyboard: [cancel] };
+  const keyboard: Keyboard = rows(a.words.map((w, i) => btn(w, `ph:w:${a.token}:${i}`)), 3);
+  if (a.phrase) keyboard.push([btn(t.wholePhraseBtn, `ph:all:${a.token}`)]);
+  keyboard.push(cancel);
+  return { text: t.photoLine(esc(a.text)), keyboard };
 }

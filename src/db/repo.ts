@@ -83,6 +83,8 @@ const NOTE_COLS = "n.word, n.ipa, n.pos, n.translation, n.example_en, n.example_
 const NEW_FILTER = `NOT EXISTS (SELECT 1 FROM cards c WHERE c.user_id = ? AND c.note_id = n.id AND ((c.direction = d.value AND c.state != 'new') OR c.buried_day = ?))`;
 /** Note columns with the user's own media (alias m = user_note_media) layered over the shared note. */
 const NOTE_COLS_M = "n.word, n.ipa, n.pos, n.translation, n.example_en, n.example_ru, n.audio_file_id, n.audio_url, COALESCE(m.source_url, n.source_url) AS source_url, m.image_file_id";
+/** Filter for notes n of a user's own dictionary; binds the user id. */
+const OWN_NOTE = "n.deck_id IN (SELECT id FROM decks WHERE owner_id = ? AND kind = 'custom')";
 const CARD_FROM = "FROM cards c JOIN notes n ON n.id = c.note_id LEFT JOIN user_note_media m ON m.note_id = n.id AND m.user_id = c.user_id";
 const CARD_COLS = `c.id, c.note_id, c.direction, c.state, c.step, c.stability, c.difficulty, c.due, c.last_review, c.scheduled_days, c.reps, c.lapses, c.buried_day, ${NOTE_COLS_M}`;
 
@@ -136,9 +138,10 @@ export class Repo {
     return this.db.prepare(`UPDATE users SET ${keys.map((k) => `${snake(k)} = ?`).join(", ")} WHERE id = ?`).bind(...vals, id);
   }
   async updateUser(id: number, patch: Partial<Omit<User, "id">>): Promise<void> { await this.updateUserStmt(id, patch).run(); }
-  /** Puts the add-flow state back only if the user has not started something else meanwhile. */
-  async restorePendingEdit(id: number, pendingEdit: string): Promise<void> {
-    await this.db.prepare("UPDATE users SET pending_edit = ? WHERE id = ? AND pending_edit IS NULL").bind(pendingEdit, id).run();
+  /** Changes the add-flow state only if it is still what the caller last saw (the user may have moved on meanwhile). */
+  async swapPendingEdit(id: number, from: string | null, to: string | null): Promise<boolean> {
+    const r = await this.db.prepare("UPDATE users SET pending_edit = ? WHERE id = ? AND pending_edit IS ?").bind(to, id, from).run();
+    return r.meta.changes > 0;
   }
 
   /* decks and notes */
@@ -224,7 +227,8 @@ export class Repo {
   /** A note only if it is in one of the user's decks (never another user's private word). */
   async getNoteForUser(userId: number, noteId: number): Promise<NoteRow | null> {
     const r = await this.db.prepare(
-      `SELECT n.id, n.deck_id, ${NOTE_COLS} FROM notes n JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? WHERE n.id = ?`,
+      `SELECT n.id, n.deck_id, ${NOTE_COLS_M} FROM notes n JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ?
+       LEFT JOIN user_note_media m ON m.note_id = n.id AND m.user_id = ud.user_id WHERE n.id = ?`,
     ).bind(userId, noteId).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
   }
@@ -237,6 +241,9 @@ export class Repo {
   }
   async setUserMedia(userId: number, noteId: number, m: { imageFileId?: string | null; sourceUrl?: string | null }): Promise<void> {
     await this.setUserMediaStmt(userId, noteId, m).run();
+  }
+  async clearUserImage(userId: number, noteId: number): Promise<void> {
+    await this.db.prepare("UPDATE user_note_media SET image_file_id = NULL WHERE user_id = ? AND note_id = ?").bind(userId, noteId).run();
   }
   async setNoteAudio(noteId: number, fileId: string): Promise<void> {
     await this.db.prepare("UPDATE notes SET audio_file_id = ? WHERE id = ?").bind(fileId, noteId).run();
@@ -480,14 +487,47 @@ export class Repo {
     return id;
   }
 
-  /** The user's own dictionary ("My words"): total and the newest cards. */
-  async listCustomNotes(userId: number, limit: number): Promise<{ total: number; items: { word: string; translation: string }[] }> {
-    const own = "n.deck_id IN (SELECT id FROM decks WHERE owner_id = ? AND kind = 'custom')";
+  /** The user's own dictionary ("My words"): total and one page of cards, newest first. */
+  async listCustomNotes(userId: number, limit: number, offset = 0): Promise<{ total: number; items: { id: number; word: string; translation: string }[] }> {
     const [count, rows] = await this.db.batch<Record<string, unknown>>([
-      this.db.prepare(`SELECT COUNT(*) AS total FROM notes n WHERE ${own}`).bind(userId),
-      this.db.prepare(`SELECT n.word, n.translation FROM notes n WHERE ${own} ORDER BY n.id DESC LIMIT ?`).bind(userId, limit),
+      this.db.prepare(`SELECT COUNT(*) AS total FROM notes n WHERE ${OWN_NOTE}`).bind(userId),
+      this.db.prepare(`SELECT n.id, n.word, n.translation FROM notes n WHERE ${OWN_NOTE} ORDER BY n.id DESC LIMIT ? OFFSET ?`).bind(userId, limit, offset),
     ]);
-    return { total: (count!.results[0]!.total as number) ?? 0, items: rows!.results.map((r) => ({ word: r.word as string, translation: r.translation as string })) };
+    return {
+      total: (count!.results[0]!.total as number) ?? 0,
+      items: rows!.results.map((r) => ({ id: r.id as number, word: r.word as string, translation: r.translation as string })),
+    };
+  }
+  /** One card of the user's own dictionary, with their picture and link. */
+  async getCustomNote(userId: number, noteId: number): Promise<NoteRow | null> {
+    const r = await this.db.prepare(
+      `SELECT n.id, n.deck_id, ${NOTE_COLS_M} FROM notes n LEFT JOIN user_note_media m ON m.note_id = n.id AND m.user_id = ?1
+       WHERE n.id = ?2 AND ${OWN_NOTE.replace("?", "?1")}`,
+    ).bind(userId, noteId).first<Record<string, unknown>>();
+    return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
+  }
+  /** A new spelling drops what was looked up for the old one (transcription, recorded audio). */
+  async updateCustomNote(userId: number, noteId: number, patch: { word?: string; translation?: string }): Promise<void> {
+    const word = patch.word?.trim() ?? null;
+    await this.db.prepare(
+      `UPDATE notes SET
+         ipa = CASE WHEN ?1 IS NOT NULL AND ?2 != word_key THEN NULL ELSE ipa END,
+         audio_file_id = CASE WHEN ?1 IS NOT NULL AND ?2 != word_key THEN NULL ELSE audio_file_id END,
+         audio_url = CASE WHEN ?1 IS NOT NULL AND ?2 != word_key THEN NULL ELSE audio_url END,
+         word = COALESCE(?1, word), word_key = COALESCE(?2, word_key), translation = COALESCE(?3, translation)
+       WHERE id = ?4 AND deck_id IN (SELECT id FROM decks WHERE owner_id = ?5 AND kind = 'custom')`,
+    ).bind(word, word === null ? null : wordKey(word), patch.translation ?? null, noteId, userId).run();
+  }
+  /** Removes a card of the user's own dictionary with its progress and picture. The review history stays for statistics. */
+  async deleteCustomNote(userId: number, noteId: number): Promise<boolean> {
+    const mine = "(SELECT n.id FROM notes n WHERE n.id = ?1 AND n.deck_id IN (SELECT id FROM decks WHERE owner_id = ?2 AND kind = 'custom'))";
+    const res = await this.db.batch([
+      this.db.prepare(`DELETE FROM cards WHERE note_id IN ${mine}`).bind(noteId, userId),
+      this.db.prepare(`DELETE FROM user_note_media WHERE note_id IN ${mine}`).bind(noteId, userId),
+      this.db.prepare(`DELETE FROM notes WHERE id IN ${mine}`).bind(noteId, userId),
+      this.db.prepare("UPDATE decks SET total = (SELECT COUNT(*) FROM notes WHERE deck_id = decks.id) WHERE owner_id = ? AND kind = 'custom'").bind(userId),
+    ]);
+    return (res[2]?.meta.changes ?? 0) > 0;
   }
 
   /* usage */
