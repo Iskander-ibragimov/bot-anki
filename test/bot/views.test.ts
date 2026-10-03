@@ -38,6 +38,15 @@ describe("views", () => {
     expect(t3).toContain("<i>A good idea.</i>");
   });
 
+  it("highlight never touches html entities or unrelated longer words", () => {
+    const ex = (word: string, exampleEn: string) => renderCard(view({ word, exampleEn }), counts, iv, false, "ru").text;
+    expect(ex("amp", "Loud & clear amp.")).toContain("<i>Loud &amp; clear <b>amp</b>.</i>");
+    expect(ex("an", "Salt and an egg.")).toContain("<i>Salt and <b>an</b> egg.</i>");
+    expect(ex("car", "A card in the car.")).toContain("<i>A card in the <b>car</b>.</i>");
+    expect(ex("decide", "He decided quickly.")).toContain("<b>decided</b>");
+    expect(ex("a<b", "Is a<b true?")).toContain("<i>Is <b>a&lt;b</b> true?</i>");
+  });
+
   it("card without an example has no empty quote", () => {
     const { text } = renderCard(view({ exampleEn: "", exampleRu: "" }), counts, iv, false, "ru");
     expect(text).not.toContain("blockquote");

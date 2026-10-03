@@ -39,11 +39,12 @@ export function harness(db: D1Database, opts: { now: number; fetch?: typeof fetc
       const ents = entities ?? (cmd ? [{ type: "bot_command", offset: 0, length: cmd[0].length }] : undefined);
       return send({ update_id: uid++, message: { message_id: 500 + uid, date: 0, chat, from, text, ...(ents ? { entities: ents } : {}) } } as Update);
     },
-    photo: (fileId: string, caption?: string, replyTo?: number) =>
+    photo: (fileId: string, caption?: string, replyTo?: number, mediaGroupId?: string) =>
       send({ update_id: uid++, message: {
         message_id: 500 + uid, date: 0, chat, from,
         photo: [{ file_id: `${fileId}-small`, file_unique_id: "s", width: 90, height: 90 }, { file_id: fileId, file_unique_id: "b", width: 800, height: 800 }],
         ...(caption ? { caption } : {}),
+        ...(mediaGroupId ? { media_group_id: mediaGroupId } : {}),
         ...(replyTo ? { reply_to_message: { message_id: replyTo, date: 0, chat, text: "x" } } : {}),
       } } as Update),
     press: (data: string, messageId = 100) =>

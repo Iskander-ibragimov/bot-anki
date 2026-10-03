@@ -40,15 +40,21 @@ export function progressLine(m: Mem, lang: Lang): string {
 }
 
 const reEsc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** Bolds the studied word (and simple inflections: -s, -ed, -ing, -ies) inside an already escaped sentence. */
-export function highlight(sentenceEsc: string, word: string): string {
-  const w = esc(word.trim());
-  if (!w) return sentenceEsc;
-  const forms = [`${reEsc(w)}(?:s|es|d|ed|ing)?`];
-  if (/e$/i.test(w)) forms.push(`${reEsc(w.slice(0, -1))}ing`);
+/** Escapes a sentence and bolds the studied word in it (plus simple inflections: -s, -ed, -ing, -ies). */
+export function highlight(sentence: string, word: string): string {
+  const w = word.trim();
+  if (!w) return esc(sentence);
+  const forms = [`${reEsc(w)}(?:s|es|ed|ing)?`];
+  if (/e$/i.test(w)) forms.push(`${reEsc(w)}d`, `${reEsc(w.slice(0, -1))}ing`);
   if (/y$/i.test(w)) forms.push(`${reEsc(w.slice(0, -1))}(?:ies|ied)`);
   const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${forms.join("|")})(?![\\p{L}\\p{N}])`, "giu");
-  return sentenceEsc.replace(re, (m) => `<b>${m}</b>`);
+  let out = "";
+  let last = 0;
+  for (const m of sentence.matchAll(re)) {
+    out += `${esc(sentence.slice(last, m.index))}<b>${esc(m[0])}</b>`;
+    last = m.index + m[0].length;
+  }
+  return out + esc(sentence.slice(last));
 }
 
 /**
@@ -68,7 +74,7 @@ export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, str
     lines.push(`<b>${esc(v.translation)}</b>`, "", `<tg-spoiler><b>${esc(v.word)}</b>${ipa ? " " + ipa : ""}</tg-spoiler>`);
   }
   if (v.exampleEn || v.exampleRu) {
-    const en = v.exampleEn ? `<i>${highlight(esc(v.exampleEn), v.word)}</i>` : "";
+    const en = v.exampleEn ? `<i>${highlight(v.exampleEn, v.word)}</i>` : "";
     lines.push(`<blockquote><tg-spoiler>${[en, esc(v.exampleRu)].filter(Boolean).join("\n")}</tg-spoiler></blockquote>`);
   } else lines.push("");
   lines.push(progressLine(v.mem, lang), `🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`);

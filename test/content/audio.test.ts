@@ -66,6 +66,41 @@ describe("audio", () => {
     expect(tg.calls).toHaveLength(0);
   });
 
+  it("playing a voice never rewinds the session to an older card", async () => {
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
+    await repo.setNoteAudio(noteIds[0]!, "FILE0");
+    await repo.saveSession({ userId: user.id, chatId: 1, messageId: 101, cardId: 1, stale: false, lastVoiceMessageId: null });
+    const tg = fakeTelegram();
+    const original = tg.call;
+    // a grade lands while the voice is being sent
+    tg.call = (async (m: string, p: Record<string, unknown>) => {
+      if (m === "sendVoice") await repo.setSessionMessage(user.id, 1, 102, 2);
+      return original(m, p);
+    }) as typeof tg.call;
+    await playVoice(repo, tg, user, noteIds[0]!);
+    expect(await repo.getSession(user.id)).toMatchObject({ messageId: 102, cardId: 2, lastVoiceMessageId: 100 });
+  });
+
+  it("a failed upload or a non-400 error reports 'unavailable' instead of throwing or re-synthesising", async () => {
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
+    const tg = fakeTelegram();
+    tg.failNext("sendVoice", 400, "Bad Request: file is too big");
+    expect(await playVoice(repo, tg, user, noteIds[0]!, async () => new Uint8Array([1]))).toBe(false);
+    await repo.setNoteAudio(noteIds[0]!, "FILE0");
+    let synthCalls = 0;
+    tg.failNext("sendVoice", 429, "Too Many Requests", 5);
+    expect(await playVoice(repo, tg, user, noteIds[0]!, async () => { synthCalls++; return new Uint8Array([1]); })).toBe(false);
+    expect(synthCalls).toBe(0);
+  });
+
+  it("a hanging synthesiser is cut off", async () => {
+    const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 1 });
+    const started = Date.now();
+    const played = await playVoice(repo, fakeTelegram(), user, noteIds[0]!, () => new Promise(() => undefined), { synthTimeoutMs: 100 });
+    expect(played).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
   it("toBytes understands base64 json, binary and stream outputs of Workers AI", async () => {
     expect([...(await toBytes({ audio: btoa("\x01\x02\xff") }))!]).toEqual([1, 2, 255]);
     expect([...(await toBytes(new Uint8Array([4, 5]).buffer))!]).toEqual([4, 5]);

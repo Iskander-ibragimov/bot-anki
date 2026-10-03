@@ -314,8 +314,10 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const t = dict(ctx.user.lang);
     if (ctx.user.onboardingStep) { await ctx.reply(t.chooseAbove); return; }
     const fileId = ctx.message.photo.at(-1)!.file_id;
-    const caption = (ctx.message.caption ?? "").trim();
-    if (caption) return addFlow(ctx, ctx.message.caption ?? "", toEntities(ctx.message.caption_entities), fileId);
+    const raw = ctx.message.caption ?? "";
+    const cmd = raw.match(/^\s*\/add(?:@\w+)?\s*/)?.[0].length ?? 0; // "/add word" typed as the caption
+    if (raw.slice(cmd).trim()) return addFlow(ctx, raw.slice(cmd), toEntities(ctx.message.caption_entities, cmd), fileId);
+    if (ctx.message.media_group_id) return; // the other photos of an album: only the captioned one counts
     const session = await repo.getSession(ctx.user.id);
     const card = session?.cardId ? await repo.getCard(ctx.user.id, session.cardId) : null;
     if (!session || !card) { await ctx.reply(t.photoNeedsWord); return; }

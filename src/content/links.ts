@@ -5,6 +5,8 @@ export interface Parsed { items: WordLink[]; orphanUrl: string | null }
 
 const MAX_ITEMS = 20;
 const MAX_URL = 512;
+const MAX_WORD = 100;
+const MAX_TRANSLATION = 300;
 const CYR = /[А-Яа-яЁё]/;
 const RAW_URL = /https?:\/\/[^\s<>"]+/gi;
 
@@ -70,12 +72,12 @@ export function parseWordsAndLinks(text: string, entities: Entity[]): Parsed {
     }
     word += text.slice(cursor, lineEnd);
     let translation: string | undefined;
-    const split = word.match(/^(.+?)(?:\s+[—–-]\s+|\s*=\s*)(.+)$/);
+    const split = word.match(/^(.+?)(?:\s*[—–]\s*|\s+-\s+|\s*=\s*)(.+)$/);
     if (split && !CYR.test(split[1]!) && CYR.test(split[2]!)) {
       word = split[1]!;
-      translation = tidy(split[2]!) || undefined;
+      translation = tidy(split[2]!).slice(0, MAX_TRANSLATION).trim() || undefined;
     }
-    word = tidy(word);
+    word = tidy(word).slice(0, MAX_WORD).trim();
     const url = inLine.find((s) => s.url)?.url ?? null;
     if (word) {
       const key = word.toLowerCase();

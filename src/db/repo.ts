@@ -216,6 +216,13 @@ export class Repo {
     const r = await this.db.prepare(`SELECT n.id, n.deck_id, ${NOTE_COLS} FROM notes n WHERE n.id = ?`).bind(id).first<Record<string, unknown>>();
     return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
   }
+  /** A note only if it is in one of the user's decks (never another user's private word). */
+  async getNoteForUser(userId: number, noteId: number): Promise<NoteRow | null> {
+    const r = await this.db.prepare(
+      `SELECT n.id, n.deck_id, ${NOTE_COLS} FROM notes n JOIN user_decks ud ON ud.deck_id = n.deck_id AND ud.user_id = ? WHERE n.id = ?`,
+    ).bind(userId, noteId).first<Record<string, unknown>>();
+    return r ? { ...noteFields(r), id: r.id as number, deckId: r.deck_id as number } : null;
+  }
   /** The user's own picture/link for a word; a given value replaces the stored one, a missing one keeps it. */
   setUserMediaStmt(userId: number, noteId: number, m: { imageFileId?: string | null; sourceUrl?: string | null }): D1PreparedStatement {
     return this.db.prepare(
@@ -326,10 +333,9 @@ export class Repo {
     const inDirs = "c.direction IN (SELECT value FROM json_each(?))";
     const notBuried = "(c.buried_day IS NULL OR c.buried_day != ?)";
     const inDecks = "n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?)";
-    // "random" is a fixed per-user shuffle (Knuth multiplicative hash of the note id), so the order is stable between calls.
-    const newOrderBy = w.newOrder === "random"
-      ? `((n.id + ${Math.trunc(userId)} * 977) * 2654435761) % 4294967296, d.value`
-      : "n.deck_id, n.id, d.value";
+    // "random" is a fixed scatter (Knuth multiplicative hash of the note id, offset per user), stable between calls.
+    const random = w.newOrder === "random";
+    const newOrderBy = random ? "((n.id + ? * 977) * 2654435761) % 4294967296, d.value" : "n.deck_id, n.id, d.value";
     const [learning, review, fresh, counts] = await this.db.batch<Record<string, unknown>>([
       this.db.prepare(`SELECT ${CARD_COLS} ${CARD_FROM}
         WHERE c.user_id = ? AND c.state IN ('learning','relearning') AND ${inDirs} AND ${inDecks} ORDER BY c.due LIMIT ?`).bind(userId, dirs, userId, lim),
@@ -338,7 +344,7 @@ export class Repo {
         .bind(userId, w.dayEndMs, dirs, w.today, userId, lim),
       this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS_M} FROM notes n JOIN json_each(?) d
         LEFT JOIN user_note_media m ON m.note_id = n.id AND m.user_id = ?
-        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY ${newOrderBy} LIMIT ?`).bind(dirs, userId, userId, userId, w.today, lim),
+        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY ${newOrderBy} LIMIT ?`).bind(dirs, userId, userId, userId, w.today, ...(random ? [userId] : []), lim),
       this.db.prepare(`SELECT
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state IN ('learning','relearning') AND c.direction IN (SELECT value FROM json_each(?2)) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS learning,
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,
@@ -426,6 +432,13 @@ export class Repo {
       ).bind(userId, chatId, messageId, cardId),
     ]);
     return prev?.results[0]?.last_voice_message_id ?? null;
+  }
+  /** Remembers the last voice message without touching which card the session points at. */
+  async setLastVoice(userId: number, chatId: number, messageId: number): Promise<void> {
+    await this.db.prepare(
+      `INSERT INTO sessions (user_id, chat_id, last_voice_message_id) VALUES (?, ?, ?)
+       ON CONFLICT (user_id) DO UPDATE SET last_voice_message_id = excluded.last_voice_message_id`,
+    ).bind(userId, chatId, messageId).run();
   }
   async markSessionStale(userId: number): Promise<void> {
     await this.db.prepare("UPDATE sessions SET stale = 1 WHERE user_id = ?").bind(userId).run();

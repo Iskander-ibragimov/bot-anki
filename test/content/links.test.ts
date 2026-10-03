@@ -76,4 +76,11 @@ describe("parseWordsAndLinks", () => {
   it("hyphenated words and english-only lines are not split", () => {
     expect(parseWordsAndLinks("well-known\nstate - of the art", []).items).toEqual([{ word: "well-known", url: null }, { word: "state - of the art", url: null }]);
   });
+
+  it("em and en dashes split without spaces; over-long words and translations are cut", () => {
+    expect(parseWordsAndLinks("resilient—устойчивый", []).items).toEqual([{ word: "resilient", url: null, translation: "устойчивый" }]);
+    const long = parseWordsAndLinks(`${"w".repeat(300)} — ${"я".repeat(900)}`, []).items[0]!;
+    expect(long.word.length).toBeLessThanOrEqual(100);
+    expect(long.translation!.length).toBeLessThanOrEqual(300);
+  });
 });

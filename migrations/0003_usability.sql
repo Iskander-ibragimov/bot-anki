@@ -8,3 +8,6 @@ CREATE TABLE user_note_media (
   source_url TEXT,
   PRIMARY KEY (user_id, note_id)
 );
+
+-- Links that users attached to shared catalog words used to be stored on the shared note and were visible to everyone.
+UPDATE notes SET source_url = NULL WHERE deck_id IN (SELECT id FROM decks WHERE kind = 'catalog');

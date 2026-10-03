@@ -177,6 +177,37 @@ describe("bot handlers", () => {
     expect(String(h.tg.of("sendMessage").at(-1)!.payload.text)).toContain("<b>a1-one</b>");
   });
 
+  it("extra photos of an album do not touch the card on screen", async () => {
+    const { h } = await startSession();
+    await h.photo("ALB2", undefined, undefined, "group-1");
+    expect(h.tg.of("sendPhoto")).toHaveLength(0);
+    expect(h.tg.of("deleteMessage")).toHaveLength(0);
+  });
+
+  it("the voice button only plays words from the user's own decks", async () => {
+    await seedCatalog(env.DB);
+    const repo = new Repo(env.DB);
+    const strangerDeck = await repo.insertDeck({ slug: null, kind: "custom", titleRu: "Чужие", titleEn: "Other", level: null, ownerId: null });
+    const [secret] = await repo.insertNotes(strangerDeck, [{ word: "secretword", ipa: null, pos: "", translation: "секрет", exampleEn: "", exampleRu: "" }]);
+    let spoken = 0;
+    const h = harness(env.DB, { now: T, synth: async () => { spoken++; return new Uint8Array([1]); } });
+    await h.text("/start");
+    await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null });
+    await h.press(`v:${secret}`, 1);
+    expect(spoken).toBe(0);
+    expect(h.tg.of("sendVoice")).toHaveLength(0);
+  });
+
+  it("a photo captioned '/add word — перевод' adds the word, not the command", async () => {
+    const h = harness(env.DB, { now: T });
+    await h.text("/start");
+    const repo = new Repo(env.DB);
+    await repo.updateUser((await repo.getUserByTg(42))!.id, { onboardingStep: null });
+    await h.photo("PIC3", "/add cozy — уютный");
+    expect(h.lastText()).toContain("<b>cozy</b>");
+    expect(h.lastText()).not.toContain("/add");
+  });
+
   it("text with a link shows a preview with the link host; url-only asks for words", async () => {
     const f = (async (input: RequestInfo | URL) => {
       const u = String(input);
