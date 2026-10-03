@@ -32,19 +32,36 @@ export function cleanUrl(raw: string): string | null {
   return u;
 }
 
-const EDGE = /^[\s—–:;,.!?…"'«»\-=]+|[\s—–:;,.!?…"'«»\-=]+$/gu;
-/** Collapse spaces, drop punctuation and brackets left dangling by a removed link. */
+const JUNK = String.raw`\s—–:;,…"'«»\-=/|→>•*`;
+const LEAD = new RegExp(`^[${JUNK}.!?]+`, "u");
+const TRAIL = new RegExp(`[${JUNK}]+$`, "u");
+/** Strips trailing debris but keeps what belongs to the phrase: "How are you?", "и т.д.". */
+function stripEnd(input: string): string {
+  let s = input;
+  for (;;) {
+    const before = s;
+    s = s.replace(TRAIL, "");
+    const last = s.slice(-1);
+    const token = s.slice(s.lastIndexOf(" ") + 1);
+    if (last === "." && !/\.\p{L}/u.test(token)) s = s.slice(0, -1);
+    else if ((last === "!" || last === "?") && !s.includes(" ")) s = s.slice(0, -1);
+    if (s === before) return s;
+  }
+}
+/** Collapse spaces, drop list markers, punctuation and brackets left dangling by a removed link. */
 function tidy(w: string): string {
-  let s = w.replace(/\s+/g, " ").replace(/\(\s*\)|\[\s*\]/g, " ").replace(/\s+/g, " ").replace(EDGE, "");
+  let s = w.replace(/\s+/g, " ").replace(/\(\s*\)|\[\s*\]/g, " ").replace(/\s+/g, " ");
+  s = s.replace(LEAD, "").replace(/^\d+[.)]\s+/, "").replace(LEAD, "");
   const n = (c: string) => s.split(c).length - 1;
   for (let guard = 0; guard < 10; guard++) {
     const before = s;
+    s = stripEnd(s);
     if (s.endsWith("(") || (s.endsWith(")") && n(")") > n("("))) s = s.slice(0, -1);
     if (s.startsWith(")") || (s.startsWith("(") && n("(") > n(")"))) s = s.slice(1);
-    s = s.replace(EDGE, "");
+    s = s.replace(LEAD, "");
     if (s === before) break;
   }
-  return s;
+  return /^\([^()]*\)$/.test(s) ? s.slice(1, -1).trim() : s; // "cozy (уютный)": the whole side was in brackets
 }
 
 /** Language by alphabet: Russian when Cyrillic letters are at least as many as Latin ("IT-отдел" is Russian). */
@@ -64,15 +81,24 @@ function splitLine(line: string): { en: string; ru: string } | { side: Side } | 
     if (a && b && a !== b) return a === "en" ? { en: sep[1]!, ru: sep[2]! } : { en: sep[2]!, ru: sep[1]! };
   }
   // No usable separator: the line must be one run of English followed by one run of Russian, or the reverse.
-  const tokens = line.split(/\s+/).filter(Boolean);
+  const spaced = line // "cat,кот" and "cat/кот": punctuation between the two alphabets is a boundary
+    .replace(/([A-Za-z])([,/:;.])(?=[А-Яа-яЁё])/g, "$1$2 ")
+    .replace(/([А-Яа-яЁё])([,/:;.])(?=[A-Za-z])/g, "$1$2 ");
   const runs: { side: Side; words: string[] }[] = [];
-  for (const tok of tokens) {
+  let loose: string[] = []; // numbers and punctuation waiting to be attached to a side
+  let startsWithLoose = false;
+  for (const tok of spaced.split(/\s+/).filter(Boolean)) {
     const l = langOf(tok);
+    if (!l) { loose.push(tok); continue; }
     const last = runs[runs.length - 1];
-    if (!l) { if (last) last.words.push(tok); continue; } // digits and punctuation stay with what precedes them
-    if (last && last.side === l) last.words.push(tok);
-    else runs.push({ side: l, words: [tok] });
+    if (!last) { startsWithLoose = loose.length > 0; runs.push({ side: l, words: [...loose, tok] }); }
+    else if (last.side === l) last.words.push(...loose, tok);
+    // "7 days a week 7 дней в неделю": a number opens each side; "page 5 страница 5": a number closes each side.
+    else if (startsWithLoose) runs.push({ side: l, words: [...loose, tok] });
+    else { last.words.push(...loose); runs.push({ side: l, words: [tok] }); }
+    loose = [];
   }
+  runs[runs.length - 1]?.words.push(...loose);
   if (runs.length === 1) return { side: runs[0]!.side };
   if (runs.length !== 2) return "unclear";
   const en = runs.find((r) => r.side === "en")!.words.join(" ");
@@ -84,7 +110,10 @@ export function parseEntry(text: string, entities: Entity[]): Entry {
   // 1. Take links out of the text (a text_link keeps its visible words).
   const spans: { start: number; end: number; url: string | null; keepText: boolean }[] = [];
   for (const e of entities) {
-    if (e.type === "url") spans.push({ start: e.offset, end: e.offset + e.length, url: cleanUrl(text.slice(e.offset, e.offset + e.length)), keepText: false });
+    if (e.type === "url") {
+      const raw = text.slice(e.offset, e.offset + e.length); // Telegram also marks "example.com/page" without a scheme
+      spans.push({ start: e.offset, end: e.offset + e.length, url: cleanUrl(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`), keepText: false });
+    }
     else if (e.type === "text_link" && e.url) spans.push({ start: e.offset, end: e.offset + e.length, url: cleanUrl(e.url), keepText: true });
   }
   for (const m of text.matchAll(RAW_URL)) {

@@ -228,9 +228,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
         const d = res.duplicate;
         return { text: t.dupLine(esc(d.word), esc(d.deckTitle), d.linkAdded, d.imageAdded), keyboard: learnKeyboard(lang) };
       }
-      case "await": return renderAwait(res.side, res.text, lang);
-      case "failed": return { text: t.autoFailed(esc(res.text), res.side === "en"), keyboard: renderAwait(res.side, res.text, lang).keyboard };
-      case "nothing": return { text: t.awaitGone, keyboard: [] };
+      case "await": return renderAwait(res, lang);
+      case "failed": return { text: t.autoFailed(esc(res.text), res.side === "en"), keyboard: renderAwait(res, lang).keyboard };
       case "preview": return renderAddPreview(res.item, res.previewId, lang);
     }
   };
@@ -241,28 +240,30 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   };
 
   /** "Translate automatically" / "don't add" under the request for the other side. */
-  c.callbackQuery(/^tr:(auto|no)$/, async (ctx) => {
+  c.callbackQuery(/^tr:(auto|no):(\w+)$/, async (ctx) => {
     const user = ctx.user;
     const t = dict(user.lang);
     const svc = content();
+    const token = ctx.match[2]!;
+    const gone = async () => { await editOrSend(ctx, clickedId(ctx), { text: t.awaitGone, keyboard: [] }); await toast(ctx); };
     if (ctx.match[1] === "no") {
-      await svc.cancelAwait(user);
+      if (!(await svc.cancelAwait(user, token))) return gone();
       await editOrSend(ctx, clickedId(ctx), { text: t.notAdded, keyboard: [] });
       return toast(ctx);
     }
-    if (svc.pendingKind(user) !== "await") {
-      await editOrSend(ctx, clickedId(ctx), { text: t.awaitGone, keyboard: [] });
-      return toast(ctx);
-    }
+    // Claimed before answering: whatever the user types while the translation runs starts a new card.
+    const waiting = await svc.takeAwait(user, token);
+    if (!waiting) return gone();
     const shown = await editOrSend(ctx, clickedId(ctx), { text: t.translating, keyboard: [] });
     await toast(ctx);
     // The AI call is slow: it runs after the webhook has answered.
     deps.waitUntil((async () => {
       try {
-        await editOrSend(ctx, shown, renderEntry(await svc.autoTranslate(user), user.lang));
+        await editOrSend(ctx, shown, renderEntry(await svc.autoTranslate(user, waiting), user.lang));
       } catch (e) {
         console.error("auto translate failed", e);
-        await editOrSend(ctx, shown, { text: isD1Limit(e) ? t.maintenance : t.genFailed, keyboard: [] }).catch(() => undefined);
+        const retry = renderEntry({ kind: "failed", side: waiting.side, text: waiting.text, token }, user.lang);
+        await editOrSend(ctx, shown, isD1Limit(e) ? { text: t.maintenance, keyboard: [] } : retry).catch(() => undefined);
       }
     })());
   });
@@ -275,14 +276,15 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     if (ctx.match[1] === "edit") {
       const items = await svc.startEdit(ctx.user, id);
       await toast(ctx);
-      await ctx.reply(items ? t.editAsk(esc(items[0]!.word)) : t.previewExpired);
+      await ctx.reply(items ? t.editAsk(esc(items[0]!.word)) : t.previewExpired, HTML);
       return;
     }
-    let saved: { word: string; total: number } | null = null;
-    try { saved = await svc.confirmAdd(ctx.user, id); } catch { /* the preview is gone: pressed twice or expired */ }
-    await editOrSend(ctx, clickedId(ctx), saved
-      ? { text: t.addedOne(esc(saved.word), saved.total), keyboard: [[{ text: t.learnBtn, callback_data: "learn", style: "primary" }], [{ text: t.moreBtn, callback_data: "help:add" }, { text: t.myWordsBtn, callback_data: "mywords" }]] }
-      : { text: t.previewExpired, keyboard: [] });
+    let saved: { word: string; total: number };
+    try { saved = await svc.confirmAdd(ctx.user, id); } catch { return toast(ctx, t.staleButton); } // tapped twice, or the preview has expired
+    await editOrSend(ctx, clickedId(ctx), {
+      text: t.addedOne(esc(saved.word), saved.total),
+      keyboard: [[{ text: t.learnBtn, callback_data: "learn", style: "primary" }], [{ text: t.moreBtn, callback_data: "help:add" }, { text: t.myWordsBtn, callback_data: "mywords" }]],
+    });
     await toast(ctx);
   });
 
@@ -344,6 +346,8 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     const cmd = raw.match(/^\s*\/add(?:@\w+)?\s*/)?.[0].length ?? 0; // "/add word" typed as the caption
     if (raw.slice(cmd).trim()) return addFlow(ctx, raw.slice(cmd), toEntities(ctx.message.caption_entities, cmd), fileId);
     if (ctx.message.media_group_id) return; // the other photos of an album: only the captioned one counts
+    const waiting = await content().attachImageToAwait(ctx.user, fileId); // "cozy", then a photo: the picture is for that card
+    if (waiting) { await send(ctx, renderAwait(waiting, ctx.user.lang, true)); return; }
     const session = await repo.getSession(ctx.user.id);
     const card = session?.cardId ? await repo.getCard(ctx.user.id, session.cardId) : null;
     if (!session || !card) { await ctx.reply(t.photoNeedsWord); return; }
@@ -367,8 +371,12 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       try {
         const r = await svc.editPreviewTranslation(ctx.user, text);
         await send(ctx, renderAddPreview(r.items[0]!, r.previewId, ctx.user.lang));
-      } catch { await ctx.reply(t.previewExpired); }
-      return;
+        return;
+      } catch {
+        // The card being edited is gone (saved, cancelled or expired): this message is a new card.
+        await svc.clearPending(ctx.user);
+        ctx.user = { ...ctx.user, pendingEdit: null };
+      }
     }
     await addFlow(ctx, text, toEntities(ctx.message.entities));
   });

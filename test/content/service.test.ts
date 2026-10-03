@@ -67,6 +67,13 @@ function service(repo: Repo, now: number, llmCards: ReturnType<typeof card>[] | 
 
 const MIN = 60_000;
 const fresh = async (repo: Repo, id: number) => (await repo.getUser(id))!;
+const TOKEN = T.toString(36);
+/** What the "translate automatically" button does: claim the waiting side, then translate it. */
+const auto = async (svc: ContentService, repo: Repo, id: number, token = TOKEN) => {
+  const u = await fresh(repo, id);
+  const w = await svc.takeAwait(u, token);
+  return w ? svc.autoTranslate(u, w) : ({ kind: "nothing" } as const);
+};
 
 describe("adding one card", () => {
   it("a pair in either order becomes a card without AI and is saved to My words", async () => {
@@ -91,7 +98,7 @@ describe("adding one card", () => {
 
   it("english first, russian next message: the two are joined", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
-    expect(await service(repo, T, "fail").addEntry(user, "break the ice", [])).toEqual({ kind: "await", side: "en", text: "break the ice" });
+    expect(await service(repo, T, "fail").addEntry(user, "break the ice", [])).toEqual({ kind: "await", side: "en", text: "break the ice", token: TOKEN });
     const r = await service(repo, T + MIN, "fail").addEntry(await fresh(repo, user.id), "растопить лёд", []);
     if (r.kind !== "preview") throw new Error(r.kind);
     expect(r.item).toMatchObject({ word: "break the ice", translation: "растопить лёд" });
@@ -100,7 +107,7 @@ describe("adding one card", () => {
 
   it("russian first, english next message: the two are joined", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
-    expect(await service(repo, T, "fail").addEntry(user, "растопить лёд", [])).toEqual({ kind: "await", side: "ru", text: "растопить лёд" });
+    expect(await service(repo, T, "fail").addEntry(user, "растопить лёд", [])).toEqual({ kind: "await", side: "ru", text: "растопить лёд", token: TOKEN });
     const r = await service(repo, T + MIN, "fail").addEntry(await fresh(repo, user.id), "break the ice", []);
     if (r.kind !== "preview") throw new Error(r.kind);
     expect(r.item).toMatchObject({ word: "break the ice", translation: "растопить лёд" });
@@ -109,14 +116,14 @@ describe("adding one card", () => {
   it("a second message in the same language starts over; a stale wait is not joined", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     await service(repo, T, "fail").addEntry(user, "cozy", []);
-    expect(await service(repo, T + MIN, "fail").addEntry(await fresh(repo, user.id), "thrive", [])).toEqual({ kind: "await", side: "en", text: "thrive" });
-    expect(await service(repo, T + 12 * MIN, "fail").addEntry(await fresh(repo, user.id), "процветать", [])).toEqual({ kind: "await", side: "ru", text: "процветать" });
+    expect(await service(repo, T + MIN, "fail").addEntry(await fresh(repo, user.id), "thrive", [])).toEqual({ kind: "await", side: "en", text: "thrive", token: (T + MIN).toString(36) });
+    expect(await service(repo, T + 12 * MIN, "fail").addEntry(await fresh(repo, user.id), "процветать", [])).toEqual({ kind: "await", side: "ru", text: "процветать", token: (T + 12 * MIN).toString(36) });
   });
 
   it("automatic translation of an english phrase", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     await service(repo, T).addEntry(user, "Cozy", []);
-    const r = await service(repo, T, [card("cozy", "уютный")]).autoTranslate(await fresh(repo, user.id));
+    const r = await auto(service(repo, T, [card("cozy", "уютный")]), repo, user.id);
     if (r.kind !== "preview") throw new Error(r.kind);
     expect(r.item).toMatchObject({ word: "Cozy", translation: "уютный", exampleEn: "It is cozy.", exampleRu: "Это уютный." });
     expect((await fresh(repo, user.id)).pendingEdit).toBeNull();
@@ -125,7 +132,7 @@ describe("adding one card", () => {
   it("automatic translation of a russian phrase keeps the user's russian", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     await service(repo, T).addEntry(user, "растопить лёд", []);
-    const r = await service(repo, T, [card("break the ice", "сломать лёд")]).autoTranslate(await fresh(repo, user.id));
+    const r = await auto(service(repo, T, [card("break the ice", "сломать лёд")]), repo, user.id);
     if (r.kind !== "preview") throw new Error(r.kind);
     expect(r.item).toMatchObject({ word: "break the ice", translation: "растопить лёд" });
   });
@@ -133,11 +140,56 @@ describe("adding one card", () => {
   it("when AI is unavailable the user can still type the other side", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
     await service(repo, T).addEntry(user, "cozy https://c.com", []);
-    expect(await service(repo, T, "fail").autoTranslate(await fresh(repo, user.id))).toEqual({ kind: "failed", side: "en", text: "cozy" });
+    expect(await auto(service(repo, T, "fail"), repo, user.id)).toEqual({ kind: "failed", side: "en", text: "cozy", token: TOKEN });
     const r = await service(repo, T + MIN, "fail").addEntry(await fresh(repo, user.id), "уютный", []);
     if (r.kind !== "preview") throw new Error(r.kind);
     expect(r.item).toMatchObject({ word: "cozy", translation: "уютный", sourceUrl: "https://c.com" });
-    expect(await service(repo, T).autoTranslate(await fresh(repo, user.id))).toEqual({ kind: "nothing" });
+    expect(await auto(service(repo, T), repo, user.id)).toEqual({ kind: "nothing" });
+  });
+
+  it("buttons under an older request do not touch the word being waited for now", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    await service(repo, T).addEntry(user, "cat", []);
+    await service(repo, T + MIN).addEntry(await fresh(repo, user.id), "dog", []);
+    const svc = service(repo, T + 2 * MIN, [card("dog", "собака")]);
+    expect(await svc.takeAwait(await fresh(repo, user.id), TOKEN)).toBeNull();
+    expect(await svc.cancelAwait(await fresh(repo, user.id), TOKEN)).toBe(false);
+    expect(svc.pendingKind(await fresh(repo, user.id))).toBe("await");
+    const r = await auto(svc, repo, user.id, (T + MIN).toString(36));
+    expect(r).toMatchObject({ kind: "preview", item: { word: "dog", translation: "собака" } });
+    await service(repo, T + 3 * MIN).addEntry(await fresh(repo, user.id), "bird", []);
+    expect(await svc.cancelAwait(await fresh(repo, user.id), (T + 3 * MIN).toString(36))).toBe(true);
+    expect((await fresh(repo, user.id)).pendingEdit).toBeNull();
+  });
+
+  it("a word typed while translation is running is a new card, and a failed translation does not overwrite it", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    await service(repo, T).addEntry(user, "cat", []);
+    const failing = service(repo, T, "fail");
+    const tapped = await fresh(repo, user.id);
+    const w = (await failing.takeAwait(tapped, TOKEN))!;
+    expect(w).toMatchObject({ side: "en", text: "cat" });
+    // the user does not wait for the answer and sends the next word
+    expect((await service(repo, T + 1000, "fail").addEntry(await fresh(repo, user.id), "собака", [])).kind).toBe("await");
+    expect((await failing.autoTranslate(tapped, w)).kind).toBe("failed");
+    expect(JSON.parse((await fresh(repo, user.id)).pendingEdit!).await.text).toBe("собака");
+  });
+
+  it("an AI answer that is not English is not accepted as the English side", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    await service(repo, T).addEntry(user, "растопить лёд", []);
+    expect((await auto(service(repo, T, [card("растопить лёд", "растопить лёд")]), repo, user.id)).kind).toBe("failed");
+  });
+
+  it("a photo sent after the word is attached to the card being built", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    expect(await service(repo, T).attachImageToAwait(user, "IMG9")).toBeNull();
+    await service(repo, T).addEntry(user, "cozy", []);
+    expect(await service(repo, T + MIN).attachImageToAwait(await fresh(repo, user.id), "IMG9")).toEqual({ side: "en", text: "cozy", token: TOKEN });
+    const r = await service(repo, T + 2 * MIN).addEntry(await fresh(repo, user.id), "уютный", []);
+    expect(r).toMatchObject({ kind: "preview", item: { word: "cozy", imageFileId: "IMG9" } });
+    await service(repo, T + 20 * MIN).addEntry(await fresh(repo, user.id), "thrive", []);
+    expect(await service(repo, T + 40 * MIN).attachImageToAwait(await fresh(repo, user.id), "LATE")).toBeNull();
   });
 
   it("a hanging provider is cut off by the overall deadline", async () => {
@@ -149,7 +201,7 @@ describe("adding one card", () => {
     const svc = new ContentService(repo, { dict: new DictionaryClient(hang), llm: new LlmClient([P("https://a/v1"), P("https://b/v1")], hang) }, T, { deadlineMs: 300 });
     await svc.addEntry(user, "cozy", []);
     const started = Date.now();
-    expect((await svc.autoTranslate(await fresh(repo, user.id))).kind).toBe("failed");
+    expect((await auto(svc, repo, user.id)).kind).toBe("failed");
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
@@ -197,6 +249,19 @@ describe("adding one card", () => {
     expect(edited.items[0]!.translation).toBe("тёплый, уютный");
   });
 
+  it("saving or cancelling a card that was being edited ends the edit", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 1 });
+    const svc = service(repo, T);
+    for (const finish of ["confirm", "cancel"] as const) {
+      const r = await svc.addEntry(await fresh(repo, user.id), finish === "confirm" ? "cozy — уютный" : "thrive — процветать", []);
+      if (r.kind !== "preview") throw new Error(r.kind);
+      await svc.startEdit(await fresh(repo, user.id), r.previewId);
+      if (finish === "confirm") await svc.confirmAdd(await fresh(repo, user.id), r.previewId);
+      else await svc.cancel(await fresh(repo, user.id), r.previewId);
+      expect((await fresh(repo, user.id)).pendingEdit).toBeNull();
+    }
+  });
+
   it("a picture travels with the card, also through the wait for the other side", async () => {
     const { repo, user } = await seedUser(env.DB, { now: T, words: 1, patch: { newPerDay: 20 } });
     await service(repo, T).addEntry(user, "cozy", [], { imageFileId: "IMG1" });
@@ -236,7 +301,8 @@ describe("adding one card", () => {
     for (const newOrder of ["deck", "random"] as const) {
       const c = await repo.candidateCards(user.id, T, { dayStartMs: T - 3_600_000, dayEndMs: T + 20 * 3_600_000, today: "2026-09-30", directions: ["en_ru"], newOrder });
       expect(c.newNotes.slice(0, 2).map((n) => n.word).sort()).toEqual(["break the ice", "cozy"]);
-      expect(c.newNotes).toHaveLength(5);
+      expect(c.newNotes.map((n) => n.own)).toEqual([true, true, false, false, false]);
+      expect(c.counts).toMatchObject({ newAvailable: 5, newOwn: 2 });
     }
   });
 });

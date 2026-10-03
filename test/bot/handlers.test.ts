@@ -208,8 +208,8 @@ describe("bot handlers", () => {
     const { h } = await ready(aiFetch);
     await h.text("cozy https://example.com/a", [{ type: "url", offset: 5, length: 21 }]);
     expect(h.lastText()).toContain("<b>cozy</b>");
-    expect(callbacks(h.lastMarkup())).toEqual(["tr:auto", "tr:no"]);
-    await h.press("tr:auto", h.tg.lastMessageId());
+    expect(callbacks(h.lastMarkup())).toEqual([expect.stringMatching(/^tr:auto:\w+$/), expect.stringMatching(/^tr:no:\w+$/)]);
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
     expect(h.lastText()).toContain("уютный");
     expect(h.lastText()).toContain("🔗 example.com");
     expect(callbacks(h.lastMarkup())[0]).toMatch(/^add:ok:/);
@@ -221,32 +221,70 @@ describe("bot handlers", () => {
 
     await h.text("счастливая случайность");
     expect(h.lastText()).toContain("по-английски");
-    await h.press("tr:no", h.tg.lastMessageId());
+    await h.press(callbacks(h.lastMarkup())[1]!, h.tg.lastMessageId());
     expect(callbacks(h.lastMarkup())).toEqual([]);
   });
 
   it("auto-translation that fails keeps the word and lets the user retry or type the other side", async () => {
     const { h, repo, u } = await ready(); // the default fetch answers 500: no AI available
     await h.text("serendipity");
-    await h.press("tr:auto", h.tg.lastMessageId());
+    const buttons = callbacks(h.lastMarkup());
+    await h.press(buttons[0]!, h.tg.lastMessageId());
     expect(h.lastText()).toContain("Не получилось перевести «serendipity»");
-    expect(callbacks(h.lastMarkup())).toEqual(["tr:auto", "tr:no"]);
+    expect(callbacks(h.lastMarkup())).toEqual(buttons);
     await h.text("счастливая случайность");
     expect(h.lastText()).toContain("<b>serendipity</b>");
     await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
     expect((await repo.findNoteForUser(u.id, "serendipity"))!.translation).toBe("счастливая случайность");
   });
 
-  it("stale buttons of the add flow answer politely and add nothing twice", async () => {
-    const { h, repo, u } = await ready();
-    await h.press("tr:auto", 300);
+  it("buttons under an older word do not act on the newest one; a second tap on Add changes nothing", async () => {
+    const { h, repo, u } = await ready(aiFetch);
+    h.setNow(T + 1000);
+    await h.text("cat");
+    const catMsg = h.tg.lastMessageId();
+    const catButtons = callbacks(h.lastMarkup());
+    h.setNow(T + 2000);
+    await h.text("dog");
+    await h.press(catButtons[0]!, catMsg);
     expect(h.lastText()).toContain("уже неактуальна");
+    await h.press(catButtons[1]!, catMsg);
+    expect(JSON.parse((await repo.getUser(u.id))!.pendingEdit!).await.text).toBe("dog");
+
     await h.text("thrive — процветать");
     const ok = callbacks(h.lastMarkup())[0]!;
     await h.press(ok, h.tg.lastMessageId());
     await h.press(ok, h.tg.lastMessageId());
-    expect(h.lastText()).toContain("устарело");
+    expect(h.lastText()).toContain("«Мои слова»");
+    expect(h.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe("Эта кнопка уже неактуальна");
     expect((await repo.listCustomNotes(u.id, 10)).total).toBe(1);
+  });
+
+  it("after Edit and then Add, the next message is a new card, not a translation for the old one", async () => {
+    const { h } = await ready();
+    await h.text("Tom & Jerry — Том и Джерри");
+    const [ok, edit] = callbacks(h.lastMarkup());
+    const preview = h.tg.lastMessageId();
+    await h.press(edit!, preview);
+    const ask = h.tg.of("sendMessage").at(-1)!;
+    expect(ask.payload.text).toContain("Tom &amp; Jerry");
+    expect(ask.payload.parse_mode).toBe("HTML");
+    await h.press(ok!, preview);
+    await h.text("thrive — процветать");
+    expect(h.lastText()).toContain("<b>thrive</b>");
+  });
+
+  it("a photo sent right after a word goes to the card being built", async () => {
+    const { h, repo, u } = await ready();
+    await h.text("cozy");
+    await h.photo("PIC7");
+    expect(h.lastText()).toContain("🖼");
+    expect(h.lastText()).toContain("<b>cozy</b>");
+    expect(callbacks(h.lastMarkup())[0]).toMatch(/^tr:auto:/);
+    await h.text("уютный");
+    expect(h.lastText()).toContain("🖼");
+    await h.press(callbacks(h.lastMarkup())[0]!, h.tg.lastMessageId());
+    expect((await repo.findNoteForUser(u.id, "cozy"))!.imageFileId).toBe("PIC7");
   });
 
   it("several cards in one message get a hint instead of being added", async () => {

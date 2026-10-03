@@ -23,7 +23,7 @@ describe("parseEntry: one card per message", () => {
 
   it("only one language is a single side waiting for the other", () => {
     expect(parse("serendipity")).toEqual({ kind: "single", side: "en", text: "serendipity", url: null });
-    expect(parse("It's up to you!")).toEqual({ kind: "single", side: "en", text: "It's up to you", url: null });
+    expect(parse("It's up to you!")).toEqual({ kind: "single", side: "en", text: "It's up to you!", url: null });
     expect(parse("счастливая случайность")).toEqual({ kind: "single", side: "ru", text: "счастливая случайность", url: null });
     expect(parse("well-known")).toEqual({ kind: "single", side: "en", text: "well-known", url: null });
     expect(parse("state - of the art")).toEqual({ kind: "single", side: "en", text: "state - of the art", url: null });
@@ -33,6 +33,33 @@ describe("parseEntry: one card per message", () => {
     expect(parse("IT department IT-отдел")).toEqual({ kind: "pair", en: "IT department", ru: "IT-отдел", url: null });
     expect(parse("e-mail = электронная почта")).toEqual({ kind: "pair", en: "e-mail", ru: "электронная почта", url: null });
     expect(parse("cozy — уютный, тёплый (о доме)")).toEqual({ kind: "pair", en: "cozy", ru: "уютный, тёплый (о доме)", url: null });
+  });
+
+  it("numbers stay with the side they were written on", () => {
+    expect(parse("7 days a week 7 дней в неделю")).toEqual({ kind: "pair", en: "7 days a week", ru: "7 дней в неделю", url: null });
+    expect(parse("2 недели 2 weeks")).toEqual({ kind: "pair", en: "2 weeks", ru: "2 недели", url: null });
+    expect(parse("page 5 страница 5")).toEqual({ kind: "pair", en: "page 5", ru: "страница 5", url: null });
+    expect(parse("at 5 pm в 5 вечера")).toEqual({ kind: "pair", en: "at 5 pm", ru: "в 5 вечера", url: null });
+    expect(parse("24/7 круглосуточно")).toEqual({ kind: "single", side: "ru", text: "24/7 круглосуточно", url: null });
+    expect(parse("10 minutes — 10 минут")).toEqual({ kind: "pair", en: "10 minutes", ru: "10 минут", url: null });
+  });
+
+  it("sides glued by punctuation or written as a list item are still split cleanly", () => {
+    const pair = { kind: "pair", en: "cat", ru: "кот", url: null };
+    for (const t of ["cat,кот", "cat/кот", "cat:кот", "кот;cat", "cat / кот", "cat -> кот", "cat → кот", "cat | кот", "1) cat - кот", "• cat — кот", "2. кот cat"]) {
+      expect(parse(t), t).toEqual(pair);
+    }
+  });
+
+  it("question and exclamation marks of a phrase are kept, abbreviations keep their dot", () => {
+    expect(parse("How are you? Как дела?")).toEqual({ kind: "pair", en: "How are you?", ru: "Как дела?", url: null });
+    expect(parse("привет, hello!")).toEqual({ kind: "pair", en: "hello", ru: "привет", url: null });
+    expect(parse("cozy (уютный)")).toEqual({ kind: "pair", en: "cozy", ru: "уютный", url: null });
+    expect(parse("и т.д. — and so on.")).toEqual({ kind: "pair", en: "and so on", ru: "и т.д.", url: null });
+  });
+
+  it("a link without http is attached too", () => {
+    expect(parseEntry("cat кот example.com/cats", [{ type: "url", offset: 8, length: 16 }])).toEqual({ kind: "pair", en: "cat", ru: "кот", url: "https://example.com/cats" });
   });
 
   it("several cards in one message are refused", () => {

@@ -112,20 +112,33 @@ export function renderAddPreview(i: PreviewItem, previewId: number, lang: Lang):
 }
 
 /** Only one language was sent: ask for the other one, or offer to translate. */
-export function renderAwait(side: "en" | "ru", text: string, lang: Lang): Rendered {
+export function renderAwait(w: { side: "en" | "ru"; text: string; token: string }, lang: Lang, pictureAttached = false): Rendered {
   const t = dict(lang);
+  const ask = w.side === "en" ? t.awaitRu(esc(w.text)) : t.awaitEn(esc(w.text));
   return {
-    text: side === "en" ? t.awaitRu(esc(text)) : t.awaitEn(esc(text)),
-    keyboard: [[btn(t.autoBtn, "tr:auto", "primary")], [btn(t.awaitCancelBtn, "tr:no")]],
+    text: pictureAttached ? `${t.pictureAttached}\n\n${ask}` : ask,
+    keyboard: [[btn(t.autoBtn, `tr:auto:${w.token}`, "primary")], [btn(t.awaitCancelBtn, `tr:no:${w.token}`)]],
   };
 }
+
+const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s);
+/** Telegram allows 4096 characters per message; the list stops before that. */
+const LIST_BUDGET = 3600;
 
 /** The user's own dictionary. */
 export function renderMyWords(list: { total: number; items: { word: string; translation: string }[] }, lang: Lang): Rendered {
   const t = dict(lang);
   const more = [btn(t.moreBtn, "help:add")];
   if (!list.total) return { text: t.myWordsEmpty, keyboard: [more] };
-  const lines = [t.myWordsTitle(list.total), "", ...list.items.map((i) => `• <b>${esc(i.word)}</b> — ${esc(i.translation)}`)];
-  if (list.total > list.items.length) lines.push("", t.myWordsLatest(list.items.length));
-  return { text: lines.join("\n"), keyboard: [[btn(t.learnBtn, "learn", "primary")], more] };
+  const lines: string[] = [];
+  let size = 0;
+  for (const i of list.items) {
+    const line = `• <b>${esc(clip(i.word, 60))}</b> — ${esc(clip(i.translation, 80))}`;
+    if (size + line.length > LIST_BUDGET) break;
+    lines.push(line);
+    size += line.length + 1;
+  }
+  const text = [t.myWordsTitle(list.total), "", ...lines];
+  if (list.total > lines.length) text.push("", t.myWordsLatest(lines.length));
+  return { text: text.join("\n"), keyboard: [[btn(t.learnBtn, "learn", "primary")], more] };
 }

@@ -52,6 +52,7 @@ export const en: Dict = {
   askWords: (host) => `🔗 Saved the link ${host}. Send a word or phrase from it and I’ll attach the link to the card.\n<i>Waiting for 10 minutes.</i>`,
   awaitRu: (text) => `<b>${text}</b>\n\nNow send the Russian translation in your next message — or tap the button and I’ll translate it.`,
   awaitEn: (text) => `<b>${text}</b>\n\nNow send the English for it in your next message — or tap the button and I’ll translate it.`,
+  pictureAttached: "🖼 Picture attached to the card.",
   autoBtn: "🤖 Translate automatically",
   awaitCancelBtn: "✖️ Don’t add",
   translating: "⏳ Translating…",

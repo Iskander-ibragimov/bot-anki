@@ -112,11 +112,11 @@ describe("views", () => {
   });
 
   it("a single side asks for the other language and offers auto-translation", () => {
-    const en = renderAwait("en", "break <the> ice", "ru");
+    const en = renderAwait({ side: "en", text: "break <the> ice", token: "abc" }, "ru");
     expect(en.text).toContain("<b>break &lt;the&gt; ice</b>");
     expect(en.text).toContain("по-русски");
-    expect(en.keyboard.flat().map((b) => b.callback_data)).toEqual(["tr:auto", "tr:no"]);
-    expect(renderAwait("ru", "уютный", "ru").text).toContain("по-английски");
+    expect(en.keyboard.flat().map((b) => b.callback_data)).toEqual(["tr:auto:abc", "tr:no:abc"]);
+    expect(renderAwait({ side: "ru", text: "уютный", token: "abc" }, "ru").text).toContain("по-английски");
   });
 
   it("my words: empty hint, list, and a note when only the latest are shown", () => {
@@ -127,6 +127,12 @@ describe("views", () => {
     expect(some.text).toContain("a&lt;b");
     expect(some.text).toContain("последние 2");
     expect(some.keyboard.flat().map((b) => b.callback_data)).toEqual(["learn", "help:add"]);
+    // 30 long phrases must still fit into one Telegram message
+    const long = Array.from({ length: 30 }, (_, i) => ({ word: `${i} ${"very long phrase & ".repeat(5)}`.slice(0, 100), translation: "очень длинный перевод, ".repeat(14).slice(0, 300) }));
+    const big = renderMyWords({ total: 30, items: long }, "ru");
+    expect(big.text.length).toBeLessThanOrEqual(4096);
+    expect(big.text).toContain("…");
+    expect(big.text).toContain("• <b>0 very long");
   });
 
   it("ru and en have the same keys", () => {

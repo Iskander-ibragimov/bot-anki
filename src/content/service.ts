@@ -22,18 +22,19 @@ export type EntryResult =
   | { kind: "unclear" }
   | { kind: "duplicate"; duplicate: Duplicate }
   /** Only one language was sent: waiting for the other side, or for the "translate automatically" button. */
-  | { kind: "await"; side: Side; text: string }
+  | { kind: "await"; side: Side; text: string; token: string }
   | { kind: "preview"; previewId: number; item: CardDraft };
 export type AutoResult =
-  | { kind: "nothing" }
-  | { kind: "failed"; side: Side; text: string }
+  | { kind: "failed"; side: Side; text: string; token: string }
   | { kind: "duplicate"; duplicate: Duplicate }
   | { kind: "preview"; previewId: number; item: CardDraft };
 export type GenResult = { kind: "limit" } | { kind: "failed" } | { kind: "preview"; previewId: number; topic: string; items: CardDraft[] };
 
 interface Deps { dict: DictionaryClient; llm: LlmClient }
 /** One side of a card the user has sent; kept until the other side arrives. */
-interface Awaiting { side: Side; text: string; url: string | null; imageFileId: string | null; at: number }
+export interface Awaiting { side: Side; text: string; url: string | null; imageFileId: string | null; at: number }
+/** Identifies one waiting side, so that buttons under an older request cannot act on a newer word. */
+const tokenOf = (w: Awaiting) => w.at.toString(36);
 interface Pending { await?: Awaiting; preview?: { previewId: number } }
 
 const PENDING_URL_MS = 10 * 60_000;
@@ -90,7 +91,7 @@ export class ContentService {
       }
       const next: Awaiting = { side: entry.side, text: entry.text, url, imageFileId: image, at: this.now };
       await this.repo.updateUser(user.id, { ...patch, pendingEdit: JSON.stringify({ await: next } satisfies Pending) });
-      return { kind: "await", side: entry.side, text: entry.text };
+      return { kind: "await", side: entry.side, text: entry.text, token: tokenOf(next) };
     }
 
     await this.repo.updateUser(user.id, { ...patch, pendingEdit: null });
@@ -103,10 +104,23 @@ export class ContentService {
     });
   }
 
-  /** "Translate automatically" for the side the user is being asked to complete. */
-  async autoTranslate(user: User): Promise<AutoResult> {
+  /**
+   * The user pressed "translate automatically": claims the waiting side, so that whatever they type while
+   * the translation is running starts a new card. Null when the button belongs to an older request.
+   */
+  async takeAwait(user: User, token: string): Promise<Awaiting | null> {
     const w = pendingOf(user).await;
-    if (!w) return { kind: "nothing" };
+    if (!w || tokenOf(w) !== token) return null;
+    await this.repo.updateUser(user.id, { pendingEdit: null });
+    return w;
+  }
+
+  /** Completes a claimed side with AI. On failure the side is put back, so the user can type the other one. */
+  async autoTranslate(user: User, w: Awaiting): Promise<AutoResult> {
+    const failed = async (): Promise<AutoResult> => {
+      await this.repo.restorePendingEdit(user.id, JSON.stringify({ await: w } satisfies Pending));
+      return { kind: "failed", side: w.side, text: w.text, token: tokenOf(w) };
+    };
     const deadline = Date.now() + this.deadlineMs;
     try {
       const [dict, cards] = await Promise.all([
@@ -114,11 +128,10 @@ export class ContentService {
         completeCards(this.deps.llm, w.side === "en" ? WORDS_SYSTEM : RU_SYSTEM, w.side === "en" ? `Words:\n${w.text}` : `Russian:\n${w.text}`, deadline),
       ]);
       const a = cards[0];
-      if (!a) return { kind: "failed", side: w.side, text: w.text };
       // The user's own text is kept as written; AI only supplies the missing side and the example.
-      const en = w.side === "en" ? w.text : a.word.trim().slice(0, 100);
+      const en = w.side === "en" ? w.text : (a?.word ?? "").trim().slice(0, 100);
+      if (!a || !en || /[А-Яа-яЁё]/.test(en)) return await failed();
       const ru = w.side === "ru" ? w.text : a.translation;
-      await this.repo.updateUser(user.id, { pendingEdit: null });
       const dup = await this.duplicateOf(user, en, w.url, w.imageFileId);
       if (dup) return { kind: "duplicate", duplicate: dup };
       return this.preview(user, {
@@ -126,14 +139,30 @@ export class ContentService {
         sourceUrl: w.url, audioUrl: dict?.audioUrl ?? null, imageFileId: w.imageFileId,
       });
     } catch (e) {
-      if (e instanceof LlmUnavailable) return { kind: "failed", side: w.side, text: w.text };
+      const result = await failed();
+      if (e instanceof LlmUnavailable) return result;
       throw e;
     }
   }
 
-  async cancelAwait(user: User): Promise<void> {
-    if (pendingOf(user).await) await this.repo.updateUser(user.id, { pendingEdit: null });
+  /** "Don't add": forgets the waiting side. False when the button belongs to an older request. */
+  async cancelAwait(user: User, token: string): Promise<boolean> {
+    const w = pendingOf(user).await;
+    if (!w || tokenOf(w) !== token) return false;
+    await this.repo.updateUser(user.id, { pendingEdit: null });
+    return true;
   }
+
+  /** A photo sent right after one side of a card belongs to that card. */
+  async attachImageToAwait(user: User, imageFileId: string): Promise<{ side: Side; text: string; token: string } | null> {
+    const w = pendingOf(user).await;
+    if (!w || this.now - w.at > AWAIT_MS) return null;
+    await this.repo.updateUser(user.id, { pendingEdit: JSON.stringify({ await: { ...w, imageFileId } } satisfies Pending) });
+    return { side: w.side, text: w.text, token: tokenOf(w) };
+  }
+
+  /** Drops a broken add-flow state (e.g. an edit of a preview that no longer exists). */
+  async clearPending(user: User): Promise<void> { await this.repo.updateUser(user.id, { pendingEdit: null }); }
 
   /** A word the user already learns gets no second card; a new link or picture is attached to their copy only. */
   private async duplicateOf(user: User, en: string, url: string | null, image: string | null): Promise<Duplicate | null> {
@@ -181,6 +210,7 @@ export class ContentService {
     const deckId = await this.repo.customDeck(user.id, this.now);
     const [noteId] = await this.repo.insertNotes(deckId, [toNote(item)]);
     await this.repo.deletePreview(user.id, previewId);
+    await this.endEditOf(user, previewId);
     if (item.imageFileId) await this.repo.setUserMedia(user.id, noteId!, { imageFileId: item.imageFileId });
     if (item.audioUrl) await enqueue(this.repo.db, "voice", { noteId, audioUrl: item.audioUrl }, this.now, `voice:${noteId}`);
     const { total } = await this.repo.listCustomNotes(user.id, 1);
@@ -197,7 +227,14 @@ export class ContentService {
     await this.repo.setUserMedia(user.id, noteId, { imageFileId });
   }
 
-  async cancel(user: User, previewId: number): Promise<void> { await this.repo.deletePreview(user.id, previewId); }
+  async cancel(user: User, previewId: number): Promise<void> {
+    await this.repo.deletePreview(user.id, previewId);
+    await this.endEditOf(user, previewId);
+  }
+
+  private async endEditOf(user: User, previewId: number): Promise<void> {
+    if (pendingOf(user).preview?.previewId === previewId) await this.repo.updateUser(user.id, { pendingEdit: null });
+  }
 
   async generateDeck(user: User, topic: string, n: number): Promise<GenResult> {
     const count = Math.min(30, Math.max(10, Math.round(n) || 20));

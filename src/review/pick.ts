@@ -4,12 +4,15 @@ export type Pick = { kind: "card"; card: CardRow } | { kind: "new"; note: NewNot
 const LEARN_AHEAD_MS = 60_000;
 
 /**
- * Anki-style order: due learning cards, then reviews with new cards spread evenly
+ * Anki-style order: due learning cards, then the user's own new words (they are listed first and
+ * do not count against the daily limit), then reviews with new cards spread evenly
  * (one new after every ceil(reviews/newLeft) reviews), then learn-ahead within 60 s.
  */
 export function pick(c: Candidates, newLeft: number, now: number, mix: number): Pick | null {
   const due = c.learning.find((x) => x.mem.due <= now);
   if (due) return { kind: "card", card: due };
+  const own = c.newNotes[0]?.own ? c.newNotes[0] : undefined;
+  if (own) return { kind: "new", note: own };
   const review = c.review[0];
   const fresh = newLeft > 0 ? c.newNotes[0] : undefined;
   if (review && fresh) {

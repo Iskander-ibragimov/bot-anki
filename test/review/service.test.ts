@@ -79,6 +79,21 @@ describe("review service", () => {
     expect(s.counts.n).toBe(2);
   });
 
+  it("a word added to My words is shown at once, even when today's new-card limit is used up", async () => {
+    const { repo, user } = await seedUser(env.DB, { now: T, words: 3, patch: { newPerDay: 1 } });
+    const first = asCard(await new ReviewService(repo, T).nextScreen(user));
+    await new ReviewService(repo, T).grade(user, first.view.cardId, 0, 4);
+    const u = async () => (await repo.getUser(user.id))!;
+    expect((await new ReviewService(repo, T).nextScreen(await u())).kind).toBe("done");
+    const mine = await repo.customDeck(user.id, T);
+    await repo.insertNotes(mine, [{ word: "cozy", ipa: null, pos: "", translation: "уютный", exampleEn: "", exampleRu: "" }]);
+    const s = asCard(await new ReviewService(repo, T).nextScreen(await u()));
+    expect(s.view.word).toBe("cozy");
+    expect(s.counts.n).toBe(1);
+    await new ReviewService(repo, T).grade(await u(), s.view.cardId, 0, 4);
+    expect((await new ReviewService(repo, T).nextScreen(await u())).kind).toBe("done");
+  });
+
   it("day summary counts learned today and totals by stage", async () => {
     const { repo, user, noteIds } = await seedUser(env.DB, { now: T, words: 3 });
     const id = await repo.insertCard(user.id, noteIds[0]!, "en_ru", { ...newMem(T), state: "review", due: T, lastReview: T - 15 * DAY, scheduledDays: 15, stability: 15, difficulty: 4, reps: 4 });
