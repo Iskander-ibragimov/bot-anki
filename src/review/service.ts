@@ -52,7 +52,7 @@ export class ReviewService {
 
   async nextScreen(user: User, feedback: Feedback | null = null): Promise<Screen> {
     const w = dayWindow(user.tzOffsetMin, this.now);
-    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user) });
+    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user), newOrder: user.newOrder });
     const newLeft = Math.max(0, user.newPerDay - c.counts.newDoneToday);
     const p = pick(c, newLeft, this.now, user.mixCounter);
     const counts: Counts = { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review };
@@ -123,7 +123,7 @@ export class ReviewService {
     const intervals = {} as Record<Rating, string>;
     for (const g of [1, 2, 3, 4] as Rating[]) intervals[g] = formatInterval(pv[g] - this.now, user.lang);
     const w = dayWindow(user.tzOffsetMin, this.now);
-    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user) });
+    const c = await this.repo.candidateCards(user.id, this.now, { ...w, directions: directionsOf(user), newOrder: user.newOrder });
     const newLeft = Math.max(0, user.newPerDay - c.counts.newDoneToday);
     return { kind: "card", view: toView(card), intervals, feedback: null, canUndo: false,
       counts: { n: Math.min(newLeft, c.counts.newAvailable), l: c.counts.learning, r: c.counts.review } };

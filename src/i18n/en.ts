@@ -80,6 +80,7 @@ export const en: Dict = {
   setNew: (n) => `🆕 New per day: ${n}`,
   setRemind: (t) => `⏰ Reminder: ${t}`,
   setDir: (d) => `↔️ Direction: ${d === "both" ? "both" : d === "ru_en" ? "RU → EN" : "EN → RU"}`,
+  setOrder: (o) => `🔀 New words: ${o === "random" ? "mixed" : "deck by deck"}`,
   setAuto: (on) => `🔊 Autoplay: ${on ? "on" : "off"}`,
   help: "<b>Commands</b>\n/learn — review\n/decks — decks\n/gen topic — AI deck\n/stats — progress\n/settings — settings\n/undo — undo last rating\n\nTo add your own word, just type it. A list of up to 20 lines works too. A link in the same message is attached to the card.",
   helpAdd: "Type a word or phrase, e.g. <code>resilient</code>. Several lines at once work too; put a source link in the same message.",

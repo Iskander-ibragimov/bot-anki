@@ -213,7 +213,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
 
   /* settings, stats, help */
   c.command("settings", async (ctx) => { if (await ready(ctx)) await send(ctx, renderSettings(ctx.user)); });
-  c.callbackQuery(/^set:(lang|ret|new|rem|dir|auto)$/, async (ctx) => {
+  c.callbackQuery(/^set:(lang|ret|new|rem|dir|ord|auto)$/, async (ctx) => {
     const u = ctx.user;
     const cycle = <T>(list: readonly T[], v: T) => list[(list.indexOf(v) + 1) % list.length]!;
     switch (ctx.match[1]) {
@@ -222,6 +222,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       case "new": await setSetting(repo, u.id, "newPerDay", cycle([5, 10, 20] as const, u.newPerDay as 5), deps.now()); break;
       case "rem": await setSetting(repo, u.id, "remindAt", cycle(REMIND_TIMES, u.remindAt as (typeof REMIND_TIMES)[number]), deps.now()); break;
       case "dir": await setSetting(repo, u.id, "direction", cycle(["en_ru", "ru_en", "both"] as const, u.direction), deps.now()); break;
+      case "ord": await setSetting(repo, u.id, "newOrder", u.newOrder === "random" ? "deck" : "random", deps.now()); break;
       case "auto": await setSetting(repo, u.id, "autoplay", !u.autoplay, deps.now()); break;
     }
     const updated = (await repo.getUser(u.id))!;

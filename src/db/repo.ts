@@ -3,6 +3,8 @@ import type { CardState, Mem } from "../srs/fsrs";
 export type Lang = "ru" | "en";
 export type Direction = "en_ru" | "ru_en";
 export type DirectionSetting = Direction | "both";
+/** Order of new words: deck by deck, or mixed across all of the user's decks. */
+export type NewOrder = "deck" | "random";
 
 export interface User {
   id: number;
@@ -34,6 +36,7 @@ export interface User {
   createdAt: number;
   nextDailyAt: number | null;
   nextEveningAt: number | null;
+  newOrder: NewOrder;
 }
 
 export interface NoteFields {
@@ -56,7 +59,7 @@ export interface CardRow extends NoteFields { id: number; noteId: number; direct
 export interface NewNote extends NoteFields { noteId: number; direction: Direction }
 export interface QueueCounts { learning: number; review: number; newAvailable: number; newDoneToday: number }
 export interface Candidates { learning: CardRow[]; review: CardRow[]; newNotes: NewNote[]; counts: QueueCounts }
-export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number }
+export interface DayWindow { dayStartMs: number; dayEndMs: number; today: string; directions: Direction[]; limitEach?: number; newOrder?: NewOrder }
 export interface Session { userId: number; chatId: number; messageId: number | null; cardId: number | null; stale: boolean; lastVoiceMessageId: number | null }
 export interface DeckRow { id: number; slug: string | null; ownerId: number | null; kind: "catalog" | "ai" | "custom"; titleRu: string; titleEn: string; level: string | null; total: number }
 export interface ReviewLogRow {
@@ -311,6 +314,10 @@ export class Repo {
     const inDirs = "c.direction IN (SELECT value FROM json_each(?))";
     const notBuried = "(c.buried_day IS NULL OR c.buried_day != ?)";
     const inDecks = "n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?)";
+    // "random" is a fixed per-user shuffle (Knuth multiplicative hash of the note id), so the order is stable between calls.
+    const newOrderBy = w.newOrder === "random"
+      ? `((n.id + ${Math.trunc(userId)} * 977) * 2654435761) % 4294967296, d.value`
+      : "n.deck_id, n.id, d.value";
     const [learning, review, fresh, counts] = await this.db.batch<Record<string, unknown>>([
       this.db.prepare(`SELECT ${CARD_COLS} FROM cards c JOIN notes n ON n.id = c.note_id
         WHERE c.user_id = ? AND c.state IN ('learning','relearning') AND ${inDirs} AND ${inDecks} ORDER BY c.due LIMIT ?`).bind(userId, dirs, userId, lim),
@@ -318,7 +325,7 @@ export class Repo {
         WHERE c.user_id = ? AND c.state = 'review' AND c.due < ? AND ${inDirs} AND ${notBuried} AND ${inDecks} ORDER BY c.due LIMIT ?`)
         .bind(userId, w.dayEndMs, dirs, w.today, userId, lim),
       this.db.prepare(`SELECT n.id AS note_id, d.value AS direction, ${NOTE_COLS} FROM notes n JOIN json_each(?) d
-        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY n.deck_id, n.id, d.value LIMIT ?`).bind(dirs, userId, userId, w.today, lim),
+        WHERE ${inDecks} AND ${NEW_FILTER} ORDER BY ${newOrderBy} LIMIT ?`).bind(dirs, userId, userId, w.today, lim),
       this.db.prepare(`SELECT
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state IN ('learning','relearning') AND c.direction IN (SELECT value FROM json_each(?2)) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS learning,
           (SELECT COUNT(*) FROM cards c JOIN notes n ON n.id = c.note_id WHERE c.user_id = ?1 AND c.state = 'review' AND c.due < ?3 AND c.direction IN (SELECT value FROM json_each(?2)) AND (c.buried_day IS NULL OR c.buried_day != ?4) AND n.deck_id IN (SELECT deck_id FROM user_decks WHERE user_id = ?1)) AS review,

@@ -141,5 +141,8 @@ describe("bot handlers", () => {
     expect((await repo.getUser(u.id))!.retention).toBe(0.95);
     await h.press("set:dir", 200);
     expect((await repo.getUser(u.id))!.direction).toBe("ru_en");
+    await h.press("set:ord", 200);
+    expect((await repo.getUser(u.id))!.newOrder).toBe("random");
+    expect(JSON.stringify(h.lastMarkup())).toContain("вперемешку");
   });
 });

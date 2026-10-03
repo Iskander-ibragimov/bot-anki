@@ -57,7 +57,7 @@ export async function getOrCreate(repo: Repo, tgId: number, chatId: number, tgLa
   return { user: (await repo.getUserByTg(tgId))!, created: true };
 }
 
-export type SettingKey = "lang" | "retention" | "newPerDay" | "remindAt" | "direction" | "autoplay";
+export type SettingKey = "lang" | "retention" | "newPerDay" | "remindAt" | "direction" | "autoplay" | "newOrder";
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 export const RETENTIONS = [0.85, 0.9, 0.95] as const;
 export const NEW_PER_DAY = [5, 10, 20] as const;
@@ -72,6 +72,7 @@ export async function setSetting(repo: Repo, userId: number, key: SettingKey, va
     case "remindAt": if (typeof value !== "string" || !HHMM.test(value)) bad(); break;
     case "direction": if (!["en_ru", "ru_en", "both"].includes(value as string)) bad(); break;
     case "autoplay": if (typeof value !== "boolean") bad(); break;
+    case "newOrder": if (value !== "deck" && value !== "random") bad(); break;
   }
   const patch = { [key]: value } as Partial<User>;
   if (key === "remindAt") {
