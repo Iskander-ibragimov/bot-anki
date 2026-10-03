@@ -56,14 +56,15 @@ describe("first day and next day", () => {
 
     h.setNow(nextMorning + 5 * MIN);
     await h.press("learn", 900);
-    let grew = false;
-    for (let i = 0; i < 25 && !grew; i++) {
+    const maxDays = async () => (await env.DB.prepare("SELECT MAX(scheduled_days) AS d FROM cards").first<{ d: number }>())!.d;
+    const before = await maxDays();
+    for (let i = 0; i < 25; i++) {
       const g = gradeButtons(h.lastMarkup());
       if (!g.length) break;
+      expect(h.lastText()).not.toContain("→");
       await h.press(g[2]!, 900);
-      grew = /\(было \d+ дн\.\)/.test(h.lastText());
     }
-    expect(grew).toBe(true);
+    expect(await maxDays()).toBeGreaterThan(before);
     void sessionMsg;
   });
 });
