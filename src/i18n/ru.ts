@@ -44,6 +44,7 @@ export const ru = {
   finished: (time: string, tz: string) => `Готово! Каждый день в <b>${time}</b> (${tz}) пришлю напоминание, если есть что повторить.\n\nНачнём первые слова?`,
   chooseAbove: "Выберите вариант кнопкой выше ↑",
   alreadySetUp: "Вы уже настроены 🙂 /learn — повторять, /help — все команды.",
+  voiceUnavailable: "Озвучка сейчас недоступна",
   staleButton: "Эта кнопка уже неактуальна",
   nothingToUndo: "Нечего отменять",
   undone: "Оценка отменена",

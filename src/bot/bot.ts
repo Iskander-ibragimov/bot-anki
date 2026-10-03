@@ -1,7 +1,7 @@
-import { Bot, type Context, GrammyError } from "grammy";
+import { Bot, type Context, GrammyError, InputFile } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import { isAdmin, adminStatsText, importDeckCsv } from "../admin/service";
-import { playVoice } from "../content/audio";
+import { type Synth, playVoice } from "../content/audio";
 import { DictionaryClient } from "../content/dictionary";
 import { LlmClient } from "../content/llm";
 import { ContentService } from "../content/service";
@@ -12,7 +12,7 @@ import { dict } from "../i18n";
 import { ReviewService, type Screen } from "../review/service";
 import type { Rating } from "../srs/fsrs";
 import { cumulative } from "../stats/service";
-import type { TgApi } from "../tg/client";
+import { type TgApi, TgUpload } from "../tg/client";
 import { REMIND_TIMES, RETENTIONS, advanceOnboarding, getOrCreate, langFromTelegram, setSetting, startOnboarding } from "../users/service";
 import { deckTitle, learnKeyboard, renderDecks, renderGenPreview, renderOnboarding, renderSettings, renderStats } from "./screens";
 import { type Keyboard, type Rendered, esc, hostOf, renderAddPreview, renderCard, renderDone } from "./views";
@@ -23,6 +23,8 @@ export interface BotDeps {
   fetch: typeof fetch;
   waitUntil(p: Promise<unknown>): void;
   now(): number;
+  /** Speech synthesis for words without recorded audio; absent when the AI binding is not configured. */
+  synth?: Synth;
 }
 
 type Ctx = Context & { user: User };
@@ -32,7 +34,12 @@ const isD1Limit = (e: unknown) => /daily row (read|write) limit|exceeded D1/i.te
 export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
   const { repo, config } = deps;
   const bot = new Bot<Ctx>(config.botToken, botInfo ? { botInfo } : {});
-  const tg: TgApi = { call: <T>(m: string, p: Record<string, unknown>) => (bot.api.raw as unknown as Record<string, (x: unknown) => Promise<T>>)[m]!(p) };
+  const tg: TgApi = {
+    call: <T>(m: string, p: Record<string, unknown>) => {
+      const payload = Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v instanceof TgUpload ? new InputFile(v.bytes, v.filename) : v]));
+      return (bot.api.raw as unknown as Record<string, (x: unknown) => Promise<T>>)[m]!(payload);
+    },
+  };
   const content = () => new ContentService(repo, { dict: new DictionaryClient(deps.fetch), llm: new LlmClient(config.llmProviders, deps.fetch) }, deps.now());
   const reviews = () => new ReviewService(repo, deps.now());
 
@@ -82,7 +89,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       ]);
     }
     await toast(ctx);
-    if (s.kind === "card" && ctx.user.autoplay) await playVoice(repo, tg, ctx.user, s.view.noteId);
+    if (s.kind === "card" && ctx.user.autoplay) await playVoice(repo, tg, ctx.user, s.view.noteId, deps.synth);
   };
 
   const onError = async (err: { ctx: Ctx; error: unknown }) => {
@@ -150,7 +157,10 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
     await show(ctx, s, "replace");
   });
   c.command("undo", async (ctx) => { if (await ready(ctx)) await show(ctx, await reviews().undo(ctx.user), "send"); });
-  c.callbackQuery(/^v:(\d+)$/, async (ctx) => { await toast(ctx); await playVoice(repo, tg, ctx.user, Number(ctx.match[1])); });
+  c.callbackQuery(/^v:(\d+)$/, async (ctx) => {
+    const played = await playVoice(repo, tg, ctx.user, Number(ctx.match[1]), deps.synth);
+    await toast(ctx, played ? undefined : dict(ctx.user.lang).voiceUnavailable);
+  });
 
   /* decks */
   c.command("decks", async (ctx) => { if (await ready(ctx)) await send(ctx, renderDecks(await repo.listDecksForUser(ctx.user.id, deps.now()), ctx.user.lang)); });

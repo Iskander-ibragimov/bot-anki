@@ -102,6 +102,26 @@ describe("bot handlers", () => {
     expect((await repo.getSession(u.id))!.lastVoiceMessageId).toBeNull();
   });
 
+  it("voice button speaks any word through synthesis, or says it is unavailable", async () => {
+    await seedCatalog(env.DB);
+    const h = harness(env.DB, { now: T, synth: async () => new Uint8Array([1, 2, 3]) });
+    await h.text("/start");
+    const repo = new Repo(env.DB);
+    const u = (await repo.getUserByTg(42))!;
+    await repo.updateUser(u.id, { onboardingStep: null });
+    await repo.subscribe(u.id, (await repo.getDeckBySlug("a1"))!.id, T);
+    await h.text("/learn");
+    const voiceBtn = callbacks(h.tg.of("sendMessage").at(-1)!.payload.reply_markup as never).find((c) => c.startsWith("v:"))!;
+    await h.press(voiceBtn, h.tg.lastMessageId());
+    expect(h.tg.of("sendVoice")).toHaveLength(1);
+
+    const h2 = harness(env.DB, { now: T });
+    await env.DB.prepare("UPDATE notes SET audio_file_id = NULL").run();
+    await h2.press(voiceBtn, 1);
+    expect(h2.tg.of("sendVoice")).toHaveLength(0);
+    expect(h2.tg.of("answerCallbackQuery").at(-1)!.payload.text).toBe("Озвучка сейчас недоступна");
+  });
+
   it("text with a link shows a preview with the link host; url-only asks for words", async () => {
     const f = (async (input: RequestInfo | URL) => {
       const u = String(input);

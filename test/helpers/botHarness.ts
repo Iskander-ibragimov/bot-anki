@@ -3,7 +3,7 @@ import { createBot, type BotDeps } from "../../src/bot/bot";
 import { Repo } from "../../src/db/repo";
 import { fakeTelegram } from "./fakeTelegram";
 
-export function harness(db: D1Database, opts: { now: number; fetch?: typeof fetch; repo?: Repo }) {
+export function harness(db: D1Database, opts: { now: number; fetch?: typeof fetch; repo?: Repo; synth?: BotDeps["synth"] }) {
   const tg = fakeTelegram();
   const pending: Promise<unknown>[] = [];
   let now = opts.now;
@@ -13,6 +13,7 @@ export function harness(db: D1Database, opts: { now: number; fetch?: typeof fetc
     fetch: opts.fetch ?? (async () => new Response("{}", { status: 500 })),
     waitUntil: (p) => { pending.push(p); },
     now: () => now,
+    ...(opts.synth ? { synth: opts.synth } : {}),
   };
   const bot = createBot(deps, {
     id: 1, is_bot: true, first_name: "Povtor", username: "povtor_bot", can_join_groups: false,

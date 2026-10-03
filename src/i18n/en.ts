@@ -45,6 +45,7 @@ export const en: Dict = {
   finished: (time, tz) => `Done! Every day at <b>${time}</b> (${tz}) I’ll remind you if something is due.\n\nShall we start?`,
   chooseAbove: "Pick an option with the buttons above ↑",
   alreadySetUp: "You’re all set 🙂 /learn to review, /help for commands.",
+  voiceUnavailable: "Voice is unavailable right now",
   staleButton: "This button is outdated",
   nothingToUndo: "Nothing to undo",
   undone: "Rating undone",
