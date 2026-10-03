@@ -46,6 +46,8 @@ export interface NoteFields {
   audioFileId: string | null;
   audioUrl: string | null;
   sourceUrl: string | null;
+  /** The user's own picture for this word (Telegram file_id); per user, never shared. */
+  imageFileId: string | null;
 }
 export type NoteInput = Pick<NoteFields, "word" | "ipa" | "pos" | "translation" | "exampleEn" | "exampleRu"> &
   Partial<Pick<NoteFields, "audioFileId" | "audioUrl" | "sourceUrl">>;
@@ -82,6 +84,7 @@ function noteFields(r: Record<string, unknown>): NoteFields {
     word: r.word as string, ipa: (r.ipa as string) ?? null, pos: (r.pos as string) ?? "", translation: r.translation as string,
     exampleEn: (r.example_en as string) ?? "", exampleRu: (r.example_ru as string) ?? "",
     audioFileId: (r.audio_file_id as string) ?? null, audioUrl: (r.audio_url as string) ?? null, sourceUrl: (r.source_url as string) ?? null,
+    imageFileId: (r.image_file_id as string) ?? null,
   };
 }
 function rowToCard(r: Record<string, unknown>): CardRow {

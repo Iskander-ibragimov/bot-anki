@@ -82,7 +82,7 @@ export function createBot(deps: BotDeps, botInfo?: UserFromGetMe): Bot<Ctx> {
       ]);
     }
     await toast(ctx);
-    if (s.kind === "card" && ctx.user.autoplay && s.view.hasAudio) await playVoice(repo, tg, ctx.user, s.view.noteId);
+    if (s.kind === "card" && ctx.user.autoplay) await playVoice(repo, tg, ctx.user, s.view.noteId);
   };
 
   const onError = async (err: { ctx: Ctx; error: unknown }) => {

@@ -4,7 +4,7 @@ import { dict } from "../i18n";
 
 export type Button = InlineKeyboardButton.CallbackButton;
 export type Keyboard = Button[][];
-export interface Rendered { text: string; keyboard: Keyboard }
+export interface Rendered { text: string; keyboard: Keyboard; /** Telegram file_id: send as a photo with `text` as the caption. */ photo?: string }
 
 import type { CardView, Counts, DaySummary, Feedback } from "../review/service";
 export type { CardView, Counts, DaySummary, Feedback };
@@ -39,35 +39,48 @@ export function progressLine(m: Mem, lang: Lang): string {
   return parts.join(" · ");
 }
 
+const reEsc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Bolds the studied word (and simple inflections: -s, -ed, -ing, -ies) inside an already escaped sentence. */
+export function highlight(sentenceEsc: string, word: string): string {
+  const w = esc(word.trim());
+  if (!w) return sentenceEsc;
+  const forms = [`${reEsc(w)}(?:s|es|d|ed|ing)?`];
+  if (/e$/i.test(w)) forms.push(`${reEsc(w.slice(0, -1))}ing`);
+  if (/y$/i.test(w)) forms.push(`${reEsc(w.slice(0, -1))}(?:ies|ied)`);
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${forms.join("|")})(?![\\p{L}\\p{N}])`, "giu");
+  return sentenceEsc.replace(re, (m) => `<b>${m}</b>`);
+}
+
+/**
+ * Card layout: the word first, then the answer under spoilers, then progress and queue counters.
+ * A card with a picture is sent as a photo with this text as the caption.
+ */
 export function renderCard(v: CardView, c: Counts, intervals: Record<Rating, string>, canUndo: boolean, lang: Lang): Rendered {
   const t = dict(lang);
-  const lines: string[] = [`🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`];
   const ipa = v.ipa ? esc(v.ipa) : "";
   const pos = v.pos ? `<i>${esc(v.pos)}</i>` : "";
+  const lines: string[] = [];
   if (v.direction === "en_ru") {
     lines.push(`<b>${esc(v.word)}</b>`);
     if (ipa || pos) lines.push([ipa, pos].filter(Boolean).join(" · "));
-    lines.push(`<tg-spoiler><b>${esc(v.translation)}</b></tg-spoiler>`);
+    lines.push("", `<tg-spoiler><b>${esc(v.translation)}</b></tg-spoiler>`);
   } else {
-    lines.push(`<b>${esc(v.translation)}</b>`);
-    lines.push(`<tg-spoiler><b>${esc(v.word)}</b>${ipa ? " " + ipa : ""}</tg-spoiler>`);
+    lines.push(`<b>${esc(v.translation)}</b>`, "", `<tg-spoiler><b>${esc(v.word)}</b>${ipa ? " " + ipa : ""}</tg-spoiler>`);
   }
-  let text = lines.join("\n");
-  if (v.exampleEn || v.exampleRu) text += `<blockquote><tg-spoiler><i>${esc(v.exampleEn)}</i>\n${esc(v.exampleRu)}</tg-spoiler></blockquote>`;
-  else text += "\n";
-  text += progressLine(v.mem, lang);
-  if (v.sourceUrl) text += `\n🔗 <a href="${esc(v.sourceUrl)}">${esc(hostOf(v.sourceUrl))}</a>`;
+  if (v.exampleEn || v.exampleRu) {
+    const en = v.exampleEn ? `<i>${highlight(esc(v.exampleEn), v.word)}</i>` : "";
+    lines.push(`<blockquote><tg-spoiler>${[en, esc(v.exampleRu)].filter(Boolean).join("\n")}</tg-spoiler></blockquote>`);
+  } else lines.push("");
+  lines.push(progressLine(v.mem, lang), `🔵 ${c.n} · 🔴 ${c.l} · 🟢 ${c.r}`);
+  if (v.sourceUrl) lines.push(`🔗 <a href="${esc(v.sourceUrl)}">${esc(hostOf(v.sourceUrl))}</a>`);
 
   const g = (r: Rating) => `g:${v.cardId}:${v.reps}:${r}`;
   const keyboard: Keyboard = [
     [btn(`${t.again} ${intervals[1]}`, g(1), "danger"), btn(`${t.hard} ${intervals[2]}`, g(2))],
     [btn(`${t.good} ${intervals[3]}`, g(3), "success"), btn(`${t.easy} ${intervals[4]}`, g(4), "primary")],
+    canUndo ? [btn(t.speak, `v:${v.noteId}`), btn(t.undo, "u")] : [btn(t.speak, `v:${v.noteId}`)],
   ];
-  const extra: Button[] = [];
-  if (v.hasAudio) extra.push(btn(t.speak, `v:${v.noteId}`));
-  if (canUndo) extra.push(btn(t.undo, "u"));
-  if (extra.length) keyboard.push(extra);
-  return { text, keyboard };
+  return v.imageFileId ? { text: lines.join("\n"), keyboard, photo: v.imageFileId } : { text: lines.join("\n"), keyboard };
 }
 
 export function renderDone(s: DaySummary, lang: Lang): Rendered {

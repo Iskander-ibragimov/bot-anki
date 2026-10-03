@@ -7,19 +7,45 @@ import { newMem } from "../../src/srs/fsrs";
 const T = Date.UTC(2026, 8, 30, 6);
 const view = (over: Partial<CardView> = {}): CardView => ({
   cardId: 7, noteId: 3, reps: 3, direction: "en_ru", word: "reliable", ipa: "/rɪˈlaɪəbl/", pos: "adj",
-  translation: "надёжный", exampleEn: "He is reliable.", exampleRu: "Он надёжный.", hasAudio: true, sourceUrl: null,
+  translation: "надёжный", exampleEn: "He is reliable.", exampleRu: "Он надёжный.", sourceUrl: null, imageFileId: null,
   mem: { ...newMem(T), state: "review", scheduledDays: 2, reps: 3, stability: 2, difficulty: 5, lastReview: T }, ...over,
 });
 const iv = { 1: "<10м", 2: "1д", 3: "2д", 4: "4д" } as const;
 const counts = { n: 4, l: 1, r: 12 };
 
 describe("views", () => {
-  it("translation and example are inside tg-spoiler", () => {
-    const { text } = renderCard(view(), counts, iv, false, "ru");
-    expect(text).toContain("🔵 4 · 🔴 1 · 🟢 12");
-    expect(text).toContain("<b>reliable</b>");
-    expect(text).toMatch(/<tg-spoiler>[^]*надёжный[^]*<\/tg-spoiler>/);
-    expect(text).toMatch(/<blockquote><tg-spoiler>[^]*He is reliable\.[^]*<\/tg-spoiler><\/blockquote>/);
+  it("card layout: word first, blocks separated, counters last", () => {
+    const { text, photo } = renderCard(view(), counts, iv, false, "ru");
+    expect(text).toBe([
+      "<b>reliable</b>",
+      "/rɪˈlaɪəbl/ · <i>adj</i>",
+      "",
+      "<tg-spoiler><b>надёжный</b></tg-spoiler>",
+      "<blockquote><tg-spoiler><i>He is <b>reliable</b>.</i>",
+      "Он надёжный.</tg-spoiler></blockquote>",
+      "🌿 Учу · память ~2 дн. · повтор №4",
+      "🔵 4 · 🔴 1 · 🟢 12",
+    ].join("\n"));
+    expect(photo).toBeUndefined();
+  });
+
+  it("the studied word is bold in the example, including inflected forms", () => {
+    const t1 = renderCard(view({ word: "achieve", exampleEn: "She achieved her goal." }), counts, iv, false, "ru").text;
+    expect(t1).toContain("<i>She <b>achieved</b> her goal.</i>");
+    const t2 = renderCard(view({ word: "it's up to you", exampleEn: "Pizza or sushi? It's up to you." }), counts, iv, false, "ru").text;
+    expect(t2).toContain("<b>It's up to you</b>.");
+    const t3 = renderCard(view({ word: "go", exampleEn: "A good idea." }), counts, iv, false, "ru").text;
+    expect(t3).toContain("<i>A good idea.</i>");
+  });
+
+  it("card without an example has no empty quote", () => {
+    const { text } = renderCard(view({ exampleEn: "", exampleRu: "" }), counts, iv, false, "ru");
+    expect(text).not.toContain("blockquote");
+    expect(text).toContain("</tg-spoiler>\n\n🌿");
+  });
+
+  it("card with a picture is sent as a photo", () => {
+    expect(renderCard(view({ imageFileId: "PHOTO1" }), counts, iv, false, "ru").photo).toBe("PHOTO1");
   });
 
   it("keyboard is 2x2 with styles and short callbacks", () => {
@@ -34,9 +60,9 @@ describe("views", () => {
     expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3", "u"]);
   });
 
-  it("voice button only when audio exists; undo only when allowed", () => {
-    const { keyboard } = renderCard(view({ hasAudio: false }), counts, iv, false, "ru");
-    expect(keyboard).toHaveLength(2);
+  it("voice button is on every card; undo only when allowed", () => {
+    const { keyboard } = renderCard(view(), counts, iv, false, "ru");
+    expect(keyboard[2]!.map((b) => b.callback_data)).toEqual(["v:3"]);
   });
 
   it("html in word is escaped", () => {
@@ -54,15 +80,9 @@ describe("views", () => {
     expect(text).toContain("🌿 Учу · память ~2 дн. · повтор №4");
   });
 
-  it("card shows only the current word, nothing about the previous one", () => {
-    const { text } = renderCard(view(), counts, iv, true, "ru");
-    expect(text.split("\n")[1]).toBe("<b>reliable</b>");
-    expect(text).not.toContain("→");
-  });
-
   it("ru to en direction hides the English word", () => {
     const { text } = renderCard(view({ direction: "ru_en" }), counts, iv, false, "ru");
-    expect(text).toMatch(/^[^]*<b>надёжный<\/b>\n<tg-spoiler><b>reliable<\/b>/);
+    expect(text.startsWith("<b>надёжный</b>\n\n<tg-spoiler><b>reliable</b> /rɪˈlaɪəbl/</tg-spoiler>\n<blockquote>")).toBe(true);
   });
 
   it("done screen shows day and cumulative totals", () => {

@@ -7,7 +7,7 @@ import { pick } from "./pick";
 export interface CardView {
   cardId: number; noteId: number; reps: number; direction: Direction;
   word: string; ipa: string | null; pos: string; translation: string; exampleEn: string; exampleRu: string;
-  hasAudio: boolean; sourceUrl: string | null; mem: Mem;
+  sourceUrl: string | null; imageFileId: string | null; mem: Mem;
 }
 export interface Feedback { word: string; kind: "grow" | "step" | "lapse" | "first"; beforeDays: number; afterMs: number; keptDays?: number }
 export interface Counts { n: number; l: number; r: number }
@@ -34,7 +34,7 @@ function toView(row: CardRow | (NewNote & { id: number; mem: Mem })): CardView {
   return {
     cardId: row.id, noteId: row.noteId, reps: row.mem.reps, direction: row.direction, word: row.word, ipa: row.ipa, pos: row.pos,
     translation: row.translation, exampleEn: row.exampleEn, exampleRu: row.exampleRu,
-    hasAudio: !!(row.audioFileId || row.audioUrl), sourceUrl: row.sourceUrl, mem: row.mem,
+    sourceUrl: row.sourceUrl, imageFileId: row.imageFileId, mem: row.mem,
   };
 }
 
